@@ -35,7 +35,6 @@ describe('lock', () => {
     expect(acquireLock()).toBe(true);
     expect(g.__msgBridgeConnected).toBe(true);
 
-    // Verify lock file content
     const lockPath = join(tmpDir, '.pi', 'msg-bridge.lock');
     const content = readFileSync(lockPath, 'utf-8');
     const [pid, owner] = content.split(':');
@@ -66,7 +65,6 @@ describe('lock', () => {
     releaseLock();
     expect(g.__msgBridgeConnected).toBe(false);
 
-    // Should be able to re-acquire after release
     expect(acquireLock()).toBe(true);
     expect(g.__msgBridgeConnected).toBe(true);
     expect(existsSync(join(tmpDir, '.pi', 'msg-bridge.lock'))).toBe(true);
@@ -76,19 +74,16 @@ describe('lock', () => {
     const { acquireLock } = await importLock(tmpDir);
     acquireLock();
 
-    // Import a fresh module to get a different instanceId
     vi.resetModules();
     delete g.__msgBridgeInstanceId;
     const lock2 = await importLock(tmpDir);
 
-    // Layer 1: g.__msgBridgeConnected is true, owner doesn't match new instanceId
     expect(lock2.acquireLock()).toBe(false);
   });
 
   it('overwrites stale lock from dead process (layer 2)', async () => {
     const piDir = join(tmpDir, '.pi');
     mkdirSync(piDir, { recursive: true });
-    // Use PID 2^30 — well above any real PID on Linux/macOS
     writeFileSync(join(piDir, 'msg-bridge.lock'), '1073741824:stale-owner');
 
     const { acquireLock } = await importLock(tmpDir);
@@ -98,12 +93,8 @@ describe('lock', () => {
   it('blocks when a live process holds the lock (layer 2)', async () => {
     const piDir = join(tmpDir, '.pi');
     mkdirSync(piDir, { recursive: true });
-    // Use current PID with a different owner — simulates another instance in
-    // a different process that happens to be alive
     writeFileSync(join(piDir, 'msg-bridge.lock'), `${process.pid}:other-instance`);
 
-    // Layer 1 passes (no global flag set).
-    // Layer 2: same PID, different owner → blocked.
     const { acquireLock } = await importLock(tmpDir);
     expect(acquireLock()).toBe(false);
   });
@@ -116,7 +107,6 @@ describe('lock', () => {
     g.__msgBridgeOwner = 'someone-else';
     releaseLock();
 
-    // Lock should still be held
     g.__msgBridgeOwner = realOwner;
     expect(g.__msgBridgeConnected).toBe(true);
     expect(existsSync(join(tmpDir, '.pi', 'msg-bridge.lock'))).toBe(true);
@@ -128,5 +118,45 @@ describe('lock', () => {
 
     acquireLock();
     expect(existsSync(join(tmpDir, '.pi'))).toBe(true);
+  });
+
+  it('forceAcquireLock overwrites another owner', async () => {
+    const piDir = join(tmpDir, '.pi');
+    mkdirSync(piDir, { recursive: true });
+    writeFileSync(join(piDir, 'msg-bridge.lock'), `${process.pid}:other-instance`);
+
+    const { forceAcquireLock } = await importLock(tmpDir);
+    const previousOwner = forceAcquireLock();
+
+    expect(previousOwner).toEqual({ pid: process.pid, owner: 'other-instance' });
+    expect(readFileSync(join(piDir, 'msg-bridge.lock'), 'utf-8')).toBe(`${process.pid}:${g.__msgBridgeInstanceId}`);
+    expect(g.__msgBridgeConnected).toBe(true);
+    expect(g.__msgBridgeOwner).toBe(g.__msgBridgeInstanceId);
+  });
+
+  it('reports whether lock is held locally and currently owned', async () => {
+    const { acquireLock, isCurrentLockOwner, isLockHeldLocally } = await importLock(tmpDir);
+
+    expect(isLockHeldLocally()).toBe(false);
+    expect(isCurrentLockOwner()).toBe(false);
+
+    acquireLock();
+    expect(isLockHeldLocally()).toBe(true);
+    expect(isCurrentLockOwner()).toBe(true);
+  });
+
+  it('detects when local ownership has been stolen', async () => {
+    const { acquireLock, getInstanceId, isCurrentLockOwner, isLockHeldLocally } = await importLock(tmpDir);
+    expect(acquireLock()).toBe(true);
+    expect(isCurrentLockOwner()).toBe(true);
+
+    writeFileSync(
+      join(tmpDir, '.pi', 'msg-bridge.lock'),
+      `${process.pid}:someone-else`,
+    );
+
+    expect(getInstanceId()).toBe(g.__msgBridgeInstanceId);
+    expect(isLockHeldLocally()).toBe(true);
+    expect(isCurrentLockOwner()).toBe(false);
   });
 });

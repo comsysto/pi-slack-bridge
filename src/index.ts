@@ -6,7 +6,7 @@ import * as path from "path";
 import { ChallengeAuth } from "./auth/challenge-auth.js";
 import { loadConfig, saveConfig } from "./config.js";
 import { extractTextFromMessage, formatToolCalls, hasToolCalls, splitMessage } from "./formatting.js";
-import { acquireLock, releaseLock } from "./lock.js";
+import { acquireLock, forceAcquireLock, getInstanceId, getLockOwner, isCurrentLockOwner, isLockHeldLocally, releaseLock } from "./lock.js";
 import { DiscordProvider } from "./transports/discord.js";
 import { TransportManager } from "./transports/manager.js";
 import { MatrixProvider } from "./transports/matrix.js";
@@ -26,6 +26,12 @@ export default function (pi: ExtensionAPI): void {
   let pendingRemoteChat: PendingRemoteChat | null = null;
   let auth: ChallengeAuth;
   let ctx: ExtensionContext;
+  let ownershipTimer: NodeJS.Timeout | undefined;
+  let ownershipCheckInProgress = false;
+
+  function ownsBridgeConnection(): boolean {
+    return isLockHeldLocally() && isCurrentLockOwner();
+  }
 
   /**
    * Update status widget
@@ -176,6 +182,10 @@ export default function (pi: ExtensionAPI): void {
     });
 
     transportManager.onMessage((msg) => {
+      if (!ownsBridgeConnection()) {
+        return;
+      }
+
       pendingRemoteChat = {
         chatId: msg.chatId,
         transport: msg.transport,
@@ -191,6 +201,23 @@ export default function (pi: ExtensionAPI): void {
       ctx.ui.notify(`❌ ${transport} error: ${err.message}`, "error");
     });
 
+    ownershipTimer = setInterval(() => {
+      if (ownershipCheckInProgress || !isLockHeldLocally() || isCurrentLockOwner()) return;
+      ownershipCheckInProgress = true;
+
+      void (async () => {
+        await transportManager.disconnectAll();
+        pendingRemoteChat = null;
+        releaseLock();
+        updateWidget();
+        ctx.ui.notify("🔄 msg-bridge connection moved to another session", "info");
+      })().catch((err) => {
+        ctx.ui.notify(`❌ Failed to release msg-bridge connection after ownership loss: ${(err as Error).message}`, "error");
+      }).finally(() => {
+        ownershipCheckInProgress = false;
+      });
+    }, 250);
+
     updateWidget();
   });
 
@@ -198,7 +225,7 @@ export default function (pi: ExtensionAPI): void {
    * Handle turn start - send typing indicator
    */
   pi.on("turn_start", async (_event, _context) => {
-    if (pendingRemoteChat) {
+    if (pendingRemoteChat && ownsBridgeConnection()) {
       try {
         await transportManager.sendTyping(
           pendingRemoteChat.chatId,
@@ -214,7 +241,12 @@ export default function (pi: ExtensionAPI): void {
    * Handle turn end - send response back to messenger
    */
   pi.on("turn_end", async (event, _context) => {
-    if (!pendingRemoteChat) return;
+    if (!pendingRemoteChat || !ownsBridgeConnection()) {
+      if (!ownsBridgeConnection()) {
+        pendingRemoteChat = null;
+      }
+      return;
+    }
 
     try {
       const message = event.message as AssistantMessage;
@@ -264,6 +296,10 @@ export default function (pi: ExtensionAPI): void {
    * Cleanup on session exit — release lock and disconnect transports
    */
   pi.on("session_shutdown", async (_event, _context) => {
+    if (ownershipTimer) {
+      clearInterval(ownershipTimer);
+      ownershipTimer = undefined;
+    }
     await transportManager.disconnectAll();
     releaseLock();
   });
@@ -312,10 +348,11 @@ export default function (pi: ExtensionAPI): void {
         context.ui.notify(helpText.join("\n"), "info");
         break;
       }
-      case "connect":
-        if (!acquireLock()) {
-          context.ui.notify("⚠️ Another msg-bridge instance is already connected. Run /msg-bridge disconnect there first.", "warning");
-          break;
+      case "connect": {
+        const previousOwner = getLockOwner();
+        forceAcquireLock();
+        if (previousOwner && (previousOwner.pid !== process.pid || previousOwner.owner !== getInstanceId())) {
+          context.ui.notify("🔄 Taking over msg-bridge connection from another session...", "info");
         }
         try {
           await transportManager.connectAll();
@@ -332,6 +369,7 @@ export default function (pi: ExtensionAPI): void {
           );
         }
         break;
+      }
 
       case "disconnect": {
         await transportManager.disconnectAll();

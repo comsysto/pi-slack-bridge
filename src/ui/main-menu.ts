@@ -6,7 +6,7 @@
 
 import type { ChallengeAuth } from "../auth/challenge-auth.js";
 import { loadConfig, saveConfig } from "../config.js";
-import { acquireLock, releaseLock } from "../lock.js";
+import { acquireLock, forceAcquireLock, getInstanceId, getLockOwner, releaseLock } from "../lock.js";
 import { DiscordProvider } from "../transports/discord.js";
 import type { TransportManager } from "../transports/manager.js";
 import { MatrixProvider } from "../transports/matrix.js";
@@ -63,10 +63,12 @@ function showHelp(mctx: MenuContext): void {
 // ── Actions ─────────────────────────────────────────────────────────────────
 
 async function doConnect(mctx: MenuContext): Promise<void> {
-  if (!acquireLock()) {
-    mctx.ui.notify("⚠️ Another instance is already connected.", "warning");
-    return;
+  const previousOwner = getLockOwner();
+  forceAcquireLock();
+  if (previousOwner && (previousOwner.pid !== process.pid || previousOwner.owner !== getInstanceId())) {
+    mctx.ui.notify("🔄 Taking over msg-bridge connection from another session...", "info");
   }
+
   try {
     await mctx.transportManager.connectAll();
     const cfg = loadConfig();
