@@ -236,8 +236,9 @@ export default function (pi: ExtensionAPI): void {
 
       const fullText = parts.join("\n\n");
 
-      // Split long messages for Telegram's 4096 char limit
-      const chunks = splitMessage(fullText, 4000);
+      // Split long messages — use transport-appropriate limits
+      const maxChunkLen = pendingRemoteChat.transport === "slack" ? 12000 : 4000;
+      const chunks = splitMessage(fullText, maxChunkLen);
       for (const chunk of chunks) {
         await transportManager.sendMessage(
           pendingRemoteChat.chatId,

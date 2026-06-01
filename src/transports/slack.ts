@@ -1,4 +1,5 @@
 import type { ChallengeAuth } from "../auth/challenge-auth.js";
+import { markdownToBlocks } from "../slack-blocks.js";
 import type { ExternalMessage } from "../types.js";
 import type { ITransportProvider } from "./interface.js";
 
@@ -220,9 +221,12 @@ export class SlackProvider implements ITransportProvider {
     if (!text?.trim()) return;
 
     try {
+      const blocks = markdownToBlocks(text);
+
       await this.app.client.chat.postMessage({
         channel: chatId,
-        text: text,
+        text: text, // Fallback for notifications/accessibility
+        blocks: blocks,
       });
     } catch (error) {
       throw new Error(`Slack send failed: ${(error as Error).message}`);
