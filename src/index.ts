@@ -3,10 +3,11 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { Type } from "typebox";
 import { ChallengeAuth } from "./auth/challenge-auth.js";
 import { loadConfig, saveConfig } from "./config.js";
-import { extractTextFromMessage, formatToolCalls, hasToolCalls, splitMessage } from "./formatting.js";
-import { acquireLock, forceAcquireLock, getInstanceId, getLockOwner, isCurrentLockOwner, isLockHeldLocally, releaseLock } from "./lock.js";
+import { extractTextFromMessage, formatToolCalls, hasToolCalls, splitMessage, truncate } from "./formatting.js";
+import { acquireLock, forceAcquireLock, getInstanceId, isCurrentLockOwner, isLockHeldLocally, releaseLock } from "./lock.js";
 import { DiscordProvider } from "./transports/discord.js";
 import { TransportManager } from "./transports/manager.js";
 import { MatrixProvider } from "./transports/matrix.js";
@@ -28,10 +29,214 @@ export default function (pi: ExtensionAPI): void {
   let ctx: ExtensionContext;
   let ownershipTimer: NodeJS.Timeout | undefined;
   let ownershipCheckInProgress = false;
+  let transportInitialization: Promise<void> = Promise.resolve();
 
   function ownsBridgeConnection(): boolean {
     return isLockHeldLocally() && isCurrentLockOwner();
   }
+
+  function hasConfiguredTransports(): boolean {
+    return transportManager.getAllTransports().length > 0;
+  }
+
+  function allConfiguredTransportsConnected(): boolean {
+    const status = transportManager.getStatus();
+    return status.length > 0 && status.every((s) => s.connected);
+  }
+
+  function getFirstSessionPrompt(): string {
+    const branch = ctx.sessionManager.getBranch();
+    const firstUserMessage = branch.find(
+      (entry: any) => entry.type === "message" && entry.message?.role === "user"
+    ) as any;
+
+    if (!firstUserMessage?.message?.content) {
+      return "No user prompt yet";
+    }
+
+    const text = firstUserMessage.message.content
+      .filter((part: any) => part.type === "text")
+      .map((part: any) => part.text)
+      .join("\n")
+      .trim();
+
+    return text ? truncate(text, 500) : "No text prompt yet";
+  }
+
+  function formatContextUsage(): string {
+    const usage = ctx.getContextUsage();
+    const contextWindow = usage?.contextWindow ?? ctx.model?.contextWindow;
+
+    if (!usage || !contextWindow) {
+      return "Unknown";
+    }
+
+    const percent = usage.percent === null ? "?" : `${Math.round(usage.percent)}%`;
+    const tokens = usage.tokens === null ? "?" : usage.tokens.toLocaleString();
+    return `${tokens} / ${contextWindow.toLocaleString()} tokens (${percent})`;
+  }
+
+  function getLastAssistantMessageText(): string | null {
+    const branch = ctx.sessionManager.getBranch();
+
+    for (let i = branch.length - 1; i >= 0; i--) {
+      const entry: any = branch[i];
+      if (entry.type !== "message") continue;
+      if (entry.message?.role !== "assistant") continue;
+      if (entry.message?.stopReason && entry.message.stopReason !== "stop") continue;
+
+      const text = extractTextFromMessage(entry.message as AssistantMessage).trim();
+      if (text) {
+        return text;
+      }
+    }
+
+    return null;
+  }
+
+  async function sendSlackFileToCurrentChat(filePathInput: string, options?: {
+    title?: string;
+    initialComment?: string;
+  }): Promise<string> {
+    if (!pendingRemoteChat || !ownsBridgeConnection()) {
+      throw new Error("No active remote chat is available for file upload");
+    }
+    if (pendingRemoteChat.transport !== "slack") {
+      throw new Error("File upload is currently only supported for Slack chats");
+    }
+
+    const filePath = path.isAbsolute(filePathInput)
+      ? filePathInput
+      : path.join(ctx.cwd, filePathInput);
+
+    if (!fs.existsSync(filePath)) {
+      throw new Error(`File not found: ${filePath}`);
+    }
+    if (!fs.statSync(filePath).isFile()) {
+      throw new Error(`Not a file: ${filePath}`);
+    }
+
+    await transportManager.sendFile(
+      pendingRemoteChat.chatId,
+      "slack",
+      filePath,
+      {
+        title: options?.title,
+        initialComment: options?.initialComment,
+      },
+    );
+
+    return filePath;
+  }
+
+  async function notifySlackSessionHandover(): Promise<void> {
+    const slackChats = auth.getNotificationChatIds("slack");
+    if (slackChats.length === 0) {
+      return;
+    }
+
+    const handoverMessage = [
+      "🔄 Session changed",
+      `- Working directory: \`${ctx.cwd}\``,
+      `- First prompt: ${getFirstSessionPrompt()}`,
+      `- Context window: ${formatContextUsage()}`,
+    ].join("\n");
+
+    const lastAssistantMessage = getLastAssistantMessageText();
+    const lastAssistantChunks = lastAssistantMessage
+      ? splitMessage(lastAssistantMessage, 12000)
+      : [];
+
+    for (const chatId of slackChats) {
+      try {
+        await transportManager.sendMessage(chatId, "slack", handoverMessage);
+
+        for (let i = 0; i < lastAssistantChunks.length; i++) {
+          const prefix = i === 0 ? "🧵 Last agent message\n\n" : "";
+          await transportManager.sendMessage(chatId, "slack", `${prefix}${lastAssistantChunks[i]}`);
+        }
+      } catch (_err) {
+        // Ignore notification failures to avoid breaking takeover flow
+      }
+    }
+  }
+
+  async function connectCurrentSession(options?: {
+    respectAutoConnect?: boolean;
+    showTakeoverNotice?: boolean;
+  }): Promise<boolean> {
+    await transportInitialization;
+
+    const config = loadConfig();
+    if ((options?.respectAutoConnect ?? false) && config.autoConnect === false) {
+      return false;
+    }
+    if (!hasConfiguredTransports()) {
+      return false;
+    }
+
+    const alreadyOwner = ownsBridgeConnection();
+    const previousOwner = alreadyOwner ? null : forceAcquireLock();
+    const tookOver = !!previousOwner && (previousOwner.pid !== process.pid || previousOwner.owner !== getInstanceId());
+
+    if (options?.showTakeoverNotice && tookOver) {
+      ctx.ui.notify("🔄 Taking over msg-bridge connection from another session...", "info");
+    }
+
+    if (alreadyOwner && allConfiguredTransportsConnected()) {
+      return false;
+    }
+
+    if (tookOver) {
+      await new Promise((resolve) => setTimeout(resolve, 350));
+    }
+
+    try {
+      await transportManager.connectAll();
+      updateWidget();
+      if (tookOver) {
+        await notifySlackSessionHandover();
+      }
+      return tookOver;
+    } catch (err) {
+      if (!alreadyOwner) {
+        releaseLock();
+      }
+      updateWidget();
+      throw err;
+    }
+  }
+
+  pi.registerTool({
+    name: "send_slack_file",
+    label: "Send Slack File",
+    description: "Upload a local file to the current Slack conversation",
+    promptSnippet: "Upload a local file to the active Slack chat",
+    promptGuidelines: [
+      "Use send_slack_file when the user explicitly asks to receive a file in Slack and the file already exists locally.",
+      "Prefer normal text replies unless the user asked for a file or the content is better delivered as a file."
+    ],
+    parameters: Type.Object({
+      path: Type.String({ description: "Path to the local file to upload" }),
+      title: Type.Optional(Type.String({ description: "Optional title shown in Slack" })),
+      initialComment: Type.Optional(Type.String({ description: "Optional comment to post with the file" })),
+    }),
+    async execute(_toolCallId, params) {
+      const filePath = await sendSlackFileToCurrentChat(params.path, {
+        title: params.title,
+        initialComment: params.initialComment,
+      });
+
+      return {
+        content: [{ type: "text", text: `Uploaded ${path.basename(filePath)} to the current Slack chat.` }],
+        details: {
+          transport: "slack",
+          chatId: pendingRemoteChat?.chatId,
+          path: filePath,
+        },
+      };
+    },
+  });
 
   /**
    * Update status widget
@@ -98,7 +303,7 @@ export default function (pi: ExtensionAPI): void {
     }
 
     // Initialize transports in the background (non-blocking)
-    (async () => {
+    transportInitialization = (async () => {
       const transportPromises: Promise<void>[] = [];
 
       if (config.telegram?.token) {
@@ -177,6 +382,10 @@ export default function (pi: ExtensionAPI): void {
         }
       }
     })().catch(err => {
+      throw err;
+    });
+
+    void transportInitialization.catch(err => {
       console.error("Transport initialization error:", err);
       ctx.ui.notify(`❌ Transport initialization failed: ${err.message}`, "error");
     });
@@ -219,6 +428,21 @@ export default function (pi: ExtensionAPI): void {
     }, 250);
 
     updateWidget();
+  });
+
+  pi.on("input", async (event, _context) => {
+    if (event.source !== "interactive" && event.source !== "rpc") {
+      return;
+    }
+
+    try {
+      await connectCurrentSession({ respectAutoConnect: true });
+    } catch (err) {
+      ctx.ui.notify(
+        `⚠️ msg-bridge could not move to this active session: ${(err as Error).message}`,
+        "warning"
+      );
+    }
   });
 
   /**
@@ -320,6 +544,12 @@ export default function (pi: ExtensionAPI): void {
         transportManager,
         auth,
         updateWidget,
+        connectCurrentSession: async () => {
+          const cfg = loadConfig();
+          cfg.autoConnect = true;
+          saveConfig(cfg);
+          await connectCurrentSession({ showTakeoverNotice: true });
+        },
       });
       return;
     }
@@ -341,6 +571,7 @@ export default function (pi: ExtensionAPI): void {
           "/msg-bridge configure matrix <homeserver-url> <access-token>",
           "                              Configure Matrix (Element X, etc)",
           "/msg-bridge widget            Toggle status widget on/off",
+          "/msg-bridge sendfile <path>   Upload a local file to current Slack chat",
           "/msg-bridge toggletools       Toggle tool call visibility",
           "",
           "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
@@ -349,16 +580,11 @@ export default function (pi: ExtensionAPI): void {
         break;
       }
       case "connect": {
-        const previousOwner = getLockOwner();
-        forceAcquireLock();
-        if (previousOwner && (previousOwner.pid !== process.pid || previousOwner.owner !== getInstanceId())) {
-          context.ui.notify("🔄 Taking over msg-bridge connection from another session...", "info");
-        }
         try {
-          await transportManager.connectAll();
           const cfg = loadConfig();
           cfg.autoConnect = true;
           saveConfig(cfg);
+          await connectCurrentSession({ showTakeoverNotice: true });
           context.ui.notify("✅ Connected to all configured transports", "info");
           updateWidget();
         } catch (err) {
@@ -534,6 +760,22 @@ export default function (pi: ExtensionAPI): void {
         const widgetState = cfg2.showWidget !== false ? "shown" : "hidden";
         context.ui.notify(`📊 Status widget ${widgetState}`, "info");
         updateWidget();
+        break;
+      }
+
+      case "sendfile": {
+        const fileArg = parts.slice(1).join(" ").trim();
+        if (!fileArg) {
+          context.ui.notify("Usage: /msg-bridge sendfile <path>", "error");
+          break;
+        }
+
+        try {
+          const filePath = await sendSlackFileToCurrentChat(fileArg);
+          context.ui.notify(`📎 Uploaded ${path.basename(filePath)} to current Slack chat`, "info");
+        } catch (err) {
+          context.ui.notify(`❌ File upload failed: ${(err as Error).message}`, "error");
+        }
         break;
       }
 

@@ -6,7 +6,7 @@
 
 import type { ChallengeAuth } from "../auth/challenge-auth.js";
 import { loadConfig, saveConfig } from "../config.js";
-import { acquireLock, forceAcquireLock, getInstanceId, getLockOwner, releaseLock } from "../lock.js";
+import { acquireLock, releaseLock } from "../lock.js";
 import { DiscordProvider } from "../transports/discord.js";
 import type { TransportManager } from "../transports/manager.js";
 import { MatrixProvider } from "../transports/matrix.js";
@@ -27,6 +27,7 @@ export interface MenuContext {
   transportManager: TransportManager;
   auth: ChallengeAuth;
   updateWidget: () => void;
+  connectCurrentSession: () => Promise<void>;
 }
 
 // ── Status ──────────────────────────────────────────────────────────────────
@@ -55,7 +56,8 @@ function showHelp(mctx: MenuContext): void {
     "  /msg-bridge connect               — connect all transports\n" +
     "  /msg-bridge disconnect            — disconnect all transports\n" +
     "  /msg-bridge configure <platform>  — set up a transport\n" +
-    "  /msg-bridge widget                — toggle status widget",
+    "  /msg-bridge widget                — toggle status widget\n" +
+    "  /msg-bridge sendfile <path>       — upload local file to current Slack chat",
     "info",
   );
 }
@@ -63,17 +65,8 @@ function showHelp(mctx: MenuContext): void {
 // ── Actions ─────────────────────────────────────────────────────────────────
 
 async function doConnect(mctx: MenuContext): Promise<void> {
-  const previousOwner = getLockOwner();
-  forceAcquireLock();
-  if (previousOwner && (previousOwner.pid !== process.pid || previousOwner.owner !== getInstanceId())) {
-    mctx.ui.notify("🔄 Taking over msg-bridge connection from another session...", "info");
-  }
-
   try {
-    await mctx.transportManager.connectAll();
-    const cfg = loadConfig();
-    cfg.autoConnect = true;
-    saveConfig(cfg);
+    await mctx.connectCurrentSession();
     mctx.ui.notify("✅ Connected to all configured transports", "info");
     mctx.updateWidget();
   } catch (err) {

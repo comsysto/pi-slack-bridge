@@ -1,7 +1,9 @@
+import * as fs from "fs";
+import * as path from "path";
 import type { ChallengeAuth } from "../auth/challenge-auth.js";
 import { markdownToBlocks } from "../slack-blocks.js";
 import type { ExternalMessage } from "../types.js";
-import type { ITransportProvider } from "./interface.js";
+import type { ITransportProvider, TransportFileOptions } from "./interface.js";
 
 // Dynamic import for ESM modules
 type App = any;
@@ -237,6 +239,32 @@ export class SlackProvider implements ITransportProvider {
     // Slack doesn't support typing indicators for bots
     // We could potentially add a reaction or use a "thinking" message
     // but for now we'll just skip it
+  }
+
+  async sendFile(chatId: string, filePath: string, options?: TransportFileOptions): Promise<void> {
+    if (!this.app) {
+      throw new Error("Slack not connected");
+    }
+    if (!fs.existsSync(filePath)) {
+      throw new Error(`File not found: ${filePath}`);
+    }
+
+    const stat = fs.statSync(filePath);
+    if (!stat.isFile()) {
+      throw new Error(`Not a file: ${filePath}`);
+    }
+
+    try {
+      await this.app.client.files.uploadV2({
+        channel_id: chatId,
+        file: fs.createReadStream(filePath),
+        filename: path.basename(filePath),
+        title: options?.title,
+        initial_comment: options?.initialComment,
+      });
+    } catch (error) {
+      throw new Error(`Slack file upload failed: ${(error as Error).message}`);
+    }
   }
 
   onMessage(handler: (message: ExternalMessage) => void): void {

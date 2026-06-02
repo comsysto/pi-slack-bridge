@@ -1,5 +1,10 @@
 import type { ExternalMessage } from "../types.js";
 
+export interface TransportFileOptions {
+  title?: string;
+  initialComment?: string;
+}
+
 /**
  * Transport provider interface
  * Adapts different messenger platforms (Telegram, WhatsApp, Slack, Discord)
@@ -34,6 +39,11 @@ export interface ITransportProvider {
    * @param chatId - Chat/channel identifier
    */
   sendTyping(chatId: string): Promise<void>;
+
+  /**
+   * Send a local file to a chat when supported by the transport.
+   */
+  sendFile?(chatId: string, filePath: string, options?: TransportFileOptions): Promise<void>;
 
   /**
    * Register callback for incoming messages

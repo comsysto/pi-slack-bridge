@@ -27,6 +27,7 @@ export class ChallengeAuth {
   private trustedUsers = new Set<string>();
   private channelAuth = new Map<string, ChannelAuth>();
   private blockedUsers = new Map<string, number>(); // userId -> unblock timestamp
+  private userChats = new Map<string, string>(); // namespaced userId -> DM chatId
   private adminUserId?: string;
 
   constructor(
@@ -43,6 +44,7 @@ export class ChallengeAuth {
     trustedUsers?: string[];
     adminUserId?: string;
     channels?: Record<string, { enabled: boolean; mode: "all" | "mentions" | "trusted-only" }>;
+    userChats?: Record<string, string>;
   }): void {
     if (config.trustedUsers) {
       this.trustedUsers = new Set(config.trustedUsers);
@@ -53,6 +55,9 @@ export class ChallengeAuth {
     if (config.channels) {
       this.channelAuth = new Map(Object.entries(config.channels));
     }
+    if (config.userChats) {
+      this.userChats = new Map(Object.entries(config.userChats));
+    }
   }
 
   /**
@@ -62,11 +67,13 @@ export class ChallengeAuth {
     trustedUsers: string[];
     adminUserId?: string;
     channels: Record<string, { enabled: boolean; mode: "all" | "mentions" | "trusted-only" }>;
+    userChats: Record<string, string>;
   } {
     return {
       trustedUsers: Array.from(this.trustedUsers),
       adminUserId: this.adminUserId,
       channels: Object.fromEntries(this.channelAuth),
+      userChats: Object.fromEntries(this.userChats),
     };
   }
 
@@ -98,6 +105,7 @@ export class ChallengeAuth {
     // DM: check trusted or initiate challenge
     if (!isGroupChat) {
       if (this.trustedUsers.has(namespacedUserId)) {
+        this.rememberUserChat(namespacedUserId, chatId);
         // Set as admin if first trusted user
         if (!this.adminUserId) {
           this.adminUserId = namespacedUserId;
@@ -214,6 +222,8 @@ export class ChallengeAuth {
       }
       return false;
     }
+
+    this.rememberUserChat(namespacedUserId, _chatId);
 
     // Admin commands
     const parts = text.split(/\s+/);
@@ -337,6 +347,7 @@ export class ChallengeAuth {
     // Correct code?
     if (code === challenge.code) {
       this.trustedUsers.add(userId);
+      this.rememberUserChat(userId, challenge.chatId);
       this.challenges.delete(userId);
       if (this.onSaveAuth) this.onSaveAuth();
       await sendMessage("✅ Authenticated! You can now chat with the agent.");
@@ -365,6 +376,31 @@ export class ChallengeAuth {
    */
   private generateCode(): string {
     return Math.floor(100000 + Math.random() * 900000).toString();
+  }
+
+  private rememberUserChat(userId: string, chatId: string): void {
+    if (!chatId || this.userChats.get(userId) === chatId) return;
+    this.userChats.set(userId, chatId);
+    if (this.onSaveAuth) this.onSaveAuth();
+  }
+
+  getNotificationChatIds(transport: string): string[] {
+    if (this.adminUserId?.startsWith(`${transport}:`)) {
+      const adminChatId = this.userChats.get(this.adminUserId);
+      if (adminChatId) {
+        return [adminChatId];
+      }
+    }
+
+    const chatIds = new Set<string>();
+    for (const userId of this.trustedUsers) {
+      if (!userId.startsWith(`${transport}:`)) continue;
+      const chatId = this.userChats.get(userId);
+      if (chatId) {
+        chatIds.add(chatId);
+      }
+    }
+    return Array.from(chatIds);
   }
 
   /**

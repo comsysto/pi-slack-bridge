@@ -1,5 +1,5 @@
 import type { ExternalMessage } from "../types.js";
-import type { ITransportProvider } from "./interface.js";
+import type { ITransportProvider, TransportFileOptions } from "./interface.js";
 
 /**
  * Manages multiple transport providers and routes messages
@@ -92,6 +92,28 @@ export class TransportManager {
     if (transport?.isConnected) {
       await transport.sendTyping(chatId);
     }
+  }
+
+  /**
+   * Send a local file to a specific chat via a specific transport.
+   */
+  async sendFile(
+    chatId: string,
+    transportType: string,
+    filePath: string,
+    options?: TransportFileOptions,
+  ): Promise<void> {
+    const transport = this.transports.get(transportType);
+    if (!transport) {
+      throw new Error(`Transport ${transportType} not found`);
+    }
+    if (!transport.isConnected) {
+      throw new Error(`Transport ${transportType} not connected`);
+    }
+    if (!transport.sendFile) {
+      throw new Error(`Transport ${transportType} does not support file sending`);
+    }
+    await transport.sendFile(chatId, filePath, options);
   }
 
   /**
