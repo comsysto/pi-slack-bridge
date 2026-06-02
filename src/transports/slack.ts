@@ -54,16 +54,17 @@ export class SlackProvider implements ITransportProvider {
       token: botToken,
       appToken: appToken,
       socketMode: true,
-      logLevel: slack.LogLevel.WARN,
+      logLevel: slack.LogLevel.ERROR,
     });
 
     // Get bot's own user ID for mention detection
     try {
       const authResult = await this.app.client.auth.test();
       this.botUserId = authResult.user_id || "";
-      console.log(`[Slack] Bot user ID: ${this.botUserId}`);
     } catch (e) {
-      console.warn("[Slack] Could not get bot info:", e);
+      if (this.errorHandler) {
+        this.errorHandler(new Error(`Slack bot info lookup failed: ${(e as Error).message}`));
+      }
     }
 
     // Listen for all messages
@@ -187,7 +188,6 @@ export class SlackProvider implements ITransportProvider {
 
     // Handle errors
     this.app.error(async (error: any) => {
-      console.error("[Slack] Error:", error);
       if (this.errorHandler) {
         this.errorHandler(new Error(String(error)));
       }
@@ -213,7 +213,6 @@ export class SlackProvider implements ITransportProvider {
     this._isConnected = false;
     this.userCache.clear();
     this.channelCache.clear();
-    console.log("[Slack] Disconnected");
   }
 
   async sendMessage(chatId: string, text: string): Promise<void> {

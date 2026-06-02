@@ -14,7 +14,7 @@ import { MatrixProvider } from "./transports/matrix.js";
 import { SlackProvider } from "./transports/slack.js";
 import { TelegramProvider } from "./transports/telegram.js";
 import { WhatsAppProvider } from "./transports/whatsapp.js";
-import type { PendingRemoteChat, TransportStatus } from "./types.js";
+import type { ExternalMessage, PendingRemoteChat, TransportStatus } from "./types.js";
 import { openMainMenu } from "./ui/main-menu.js";
 import { createStatusWidget } from "./ui/status-widget.js";
 
@@ -37,6 +37,15 @@ export default function (pi: ExtensionAPI): void {
 
   function hasConfiguredTransports(): boolean {
     return transportManager.getAllTransports().length > 0;
+  }
+
+  function toPendingRemoteChat(message: ExternalMessage): PendingRemoteChat {
+    return {
+      chatId: message.chatId,
+      transport: message.transport,
+      username: message.username,
+      messageId: message.messageId,
+    };
   }
 
   function allConfiguredTransportsConnected(): boolean {
@@ -94,14 +103,18 @@ export default function (pi: ExtensionAPI): void {
     return null;
   }
 
-  async function sendSlackFileToCurrentChat(filePathInput: string, options?: {
-    title?: string;
-    initialComment?: string;
-  }): Promise<string> {
-    if (!pendingRemoteChat || !ownsBridgeConnection()) {
+  async function sendSlackFileToCurrentChat(
+    filePathInput: string,
+    options?: {
+      title?: string;
+      initialComment?: string;
+    },
+    remoteChat: PendingRemoteChat | null = pendingRemoteChat,
+  ): Promise<string> {
+    if (!remoteChat || !ownsBridgeConnection()) {
       throw new Error("No active remote chat is available for file upload");
     }
-    if (pendingRemoteChat.transport !== "slack") {
+    if (remoteChat.transport !== "slack") {
       throw new Error("File upload is currently only supported for Slack chats");
     }
 
@@ -117,7 +130,7 @@ export default function (pi: ExtensionAPI): void {
     }
 
     await transportManager.sendFile(
-      pendingRemoteChat.chatId,
+      remoteChat.chatId,
       "slack",
       filePath,
       {
@@ -237,6 +250,204 @@ export default function (pi: ExtensionAPI): void {
       };
     },
   });
+
+  async function disconnectCurrentSession(): Promise<void> {
+    await transportManager.disconnectAll();
+    releaseLock();
+    const cfg = loadConfig();
+    cfg.autoConnect = false;
+    saveConfig(cfg);
+    updateWidget();
+  }
+
+  function buildBridgeStatusText(): string {
+    const stats = auth.getStats();
+    const status = transportManager.getStatus();
+    const lines = [
+      "━━━ Message Bridge Status ━━━",
+      "",
+      "Transports:",
+      ...status.map((s) => `  ${s.connected ? "●" : "○"} ${s.type}`),
+      "",
+      `Trusted Users: ${stats.trustedUsers}`,
+    ];
+
+    if (stats.trustedUsers > 0) {
+      for (const [transport, userIds] of Object.entries(stats.usersByTransport)) {
+        if (userIds.length > 0) {
+          lines.push(`  └─ ${transport}: ${userIds.join(", ")}`);
+        }
+      }
+    }
+
+    lines.push("");
+    lines.push(`Channels: ${stats.channels}`);
+    lines.push("━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    return lines.join("\n");
+  }
+
+  function buildRemoteCommandList(): string {
+    const commands = pi.getCommands();
+    const skills = commands
+      .filter((command) => command.source === "skill" && command.name.startsWith("skill:"))
+      .map((command) => ({
+        name: command.name.slice("skill:".length),
+        description: command.description,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    const prompts = commands
+      .filter((command) => command.source === "prompt")
+      .map((command) => ({
+        name: command.name,
+        description: command.description,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    const lines = [
+      "Available remote commands",
+      "",
+      "General",
+      "- `.` — show this command list",
+      "",
+      "Skills",
+      ...(skills.length > 0
+        ? skills.map((skill) => `- \`.skill ${skill.name} <args>\`${skill.description ? ` — ${skill.description}` : ""}`)
+        : ["- None"]),
+      "",
+      "Prompts",
+      ...(prompts.length > 0
+        ? prompts.map((prompt) => `- \`.prompt ${prompt.name} <args>\`${prompt.description ? ` — ${prompt.description}` : ""}`)
+        : ["- None"]),
+      "",
+      "Bridge",
+      "- `.bridge status`",
+      "- `.bridge connect`",
+      "- `.bridge disconnect`",
+      "- `.bridge sendfile <path>`",
+    ];
+
+    return lines.join("\n");
+  }
+
+  async function sendRemoteText(message: ExternalMessage, text: string): Promise<void> {
+    const maxLen = message.transport === "slack" ? 12000 : 4000;
+    const chunks = splitMessage(text, maxLen);
+    for (const chunk of chunks) {
+      await transportManager.sendMessage(message.chatId, message.transport, chunk);
+    }
+  }
+
+  async function forwardRemoteCommandToPi(message: ExternalMessage, text: string): Promise<void> {
+    pendingRemoteChat = toPendingRemoteChat(message);
+    if (ctx.isIdle()) {
+      pi.sendUserMessage(text);
+    } else {
+      pi.sendUserMessage(text, { deliverAs: "followUp" });
+    }
+  }
+
+  async function handleRemoteCommand(message: ExternalMessage): Promise<boolean> {
+    const trimmed = message.content.trim();
+    if (trimmed === ".") {
+      await sendRemoteText(message, buildRemoteCommandList());
+      return true;
+    }
+
+    if (trimmed.startsWith(".skill")) {
+      const match = trimmed.match(/^\.skill\s+([^\s]+)(?:\s+([\s\S]+))?$/);
+      if (!match) {
+        await sendRemoteText(message, "Usage: `.skill <name> [args]`");
+        return true;
+      }
+
+      const skillName = match[1];
+      const args = match[2]?.trim() ?? "";
+      const commandName = `skill:${skillName}`;
+      const command = pi.getCommands().find((item) => item.source === "skill" && item.name === commandName);
+      if (!command) {
+        await sendRemoteText(message, `Unknown skill: ${skillName}. Send \`.\` to list available commands.`);
+        return true;
+      }
+
+      await forwardRemoteCommandToPi(message, `/${commandName}${args ? ` ${args}` : ""}`);
+      return true;
+    }
+
+    if (trimmed.startsWith(".prompt")) {
+      const match = trimmed.match(/^\.prompt\s+([^\s]+)(?:\s+([\s\S]+))?$/);
+      if (!match) {
+        await sendRemoteText(message, "Usage: `.prompt <name> [args]`");
+        return true;
+      }
+
+      const promptName = match[1];
+      const args = match[2]?.trim() ?? "";
+      const command = pi.getCommands().find((item) => item.source === "prompt" && item.name === promptName);
+      if (!command) {
+        await sendRemoteText(message, `Unknown prompt: ${promptName}. Send \`.\` to list available commands.`);
+        return true;
+      }
+
+      await forwardRemoteCommandToPi(message, `/${promptName}${args ? ` ${args}` : ""}`);
+      return true;
+    }
+
+    if (trimmed.startsWith(".bridge")) {
+      const match = trimmed.match(/^\.bridge(?:\s+([^\s]+))?(?:\s+([\s\S]+))?$/);
+      const subcommand = match?.[1]?.toLowerCase() ?? "help";
+      const rest = match?.[2]?.trim() ?? "";
+
+      switch (subcommand) {
+        case "help":
+          await sendRemoteText(
+            message,
+            [
+              "Bridge commands",
+              "- `.bridge status`",
+              "- `.bridge connect`",
+              "- `.bridge disconnect`",
+              "- `.bridge sendfile <path>`",
+            ].join("\n"),
+          );
+          return true;
+        case "status":
+          await sendRemoteText(message, buildBridgeStatusText());
+          return true;
+        case "connect":
+          try {
+            const cfg = loadConfig();
+            cfg.autoConnect = true;
+            saveConfig(cfg);
+            await connectCurrentSession({ showTakeoverNotice: true });
+            await sendRemoteText(message, "✅ Connected to all configured transports");
+          } catch (err) {
+            await sendRemoteText(message, `❌ Connection failed: ${(err as Error).message}`);
+          }
+          return true;
+        case "disconnect":
+          await disconnectCurrentSession();
+          await sendRemoteText(message, "🔌 Disconnected from all transports");
+          return true;
+        case "sendfile":
+          if (!rest) {
+            await sendRemoteText(message, "Usage: `.bridge sendfile <path>`");
+            return true;
+          }
+          try {
+            const filePath = await sendSlackFileToCurrentChat(rest, undefined, toPendingRemoteChat(message));
+            await sendRemoteText(message, `📎 Uploaded ${path.basename(filePath)} to current Slack chat`);
+          } catch (err) {
+            await sendRemoteText(message, `❌ File upload failed: ${(err as Error).message}`);
+          }
+          return true;
+        default:
+          await sendRemoteText(message, `Unknown bridge command: ${subcommand}`);
+          return true;
+      }
+    }
+
+    return false;
+  }
 
   /**
    * Update status widget
@@ -395,15 +606,21 @@ export default function (pi: ExtensionAPI): void {
         return;
       }
 
-      pendingRemoteChat = {
-        chatId: msg.chatId,
-        transport: msg.transport,
-        username: msg.username,
-        messageId: msg.messageId,
-      };
+      void (async () => {
+        if (await handleRemoteCommand(msg)) {
+          return;
+        }
 
-      const taggedMessage = `[📱 @${msg.username} via ${msg.transport}]: ${msg.content}`;
-      pi.sendUserMessage(taggedMessage, { deliverAs: "followUp" });
+        pendingRemoteChat = toPendingRemoteChat(msg);
+        const taggedMessage = `[📱 @${msg.username} via ${msg.transport}]: ${msg.content}`;
+        if (ctx.isIdle()) {
+          pi.sendUserMessage(taggedMessage);
+        } else {
+          pi.sendUserMessage(taggedMessage, { deliverAs: "followUp" });
+        }
+      })().catch((err) => {
+        ctx.ui.notify(`❌ Failed to handle remote message: ${(err as Error).message}`, "error");
+      });
     });
 
     transportManager.onError((err, transport) => {
