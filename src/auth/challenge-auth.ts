@@ -28,6 +28,7 @@ export class ChallengeAuth {
   private channelAuth = new Map<string, ChannelAuth>();
   private blockedUsers = new Map<string, number>(); // userId -> unblock timestamp
   private userChats = new Map<string, string>(); // namespaced userId -> DM chatId
+  private claimOpenByTransport = new Map<string, boolean>();
   private adminUserId?: string;
 
   constructor(
@@ -45,6 +46,7 @@ export class ChallengeAuth {
     adminUserId?: string;
     channels?: Record<string, { enabled: boolean; mode: "all" | "mentions" | "trusted-only" }>;
     userChats?: Record<string, string>;
+    claimOpenByTransport?: Record<string, boolean>;
   }): void {
     if (config.trustedUsers) {
       this.trustedUsers = new Set(config.trustedUsers);
@@ -58,6 +60,9 @@ export class ChallengeAuth {
     if (config.userChats) {
       this.userChats = new Map(Object.entries(config.userChats));
     }
+    if (config.claimOpenByTransport) {
+      this.claimOpenByTransport = new Map(Object.entries(config.claimOpenByTransport));
+    }
   }
 
   /**
@@ -68,12 +73,14 @@ export class ChallengeAuth {
     adminUserId?: string;
     channels: Record<string, { enabled: boolean; mode: "all" | "mentions" | "trusted-only" }>;
     userChats: Record<string, string>;
+    claimOpenByTransport: Record<string, boolean>;
   } {
     return {
       trustedUsers: Array.from(this.trustedUsers),
       adminUserId: this.adminUserId,
       channels: Object.fromEntries(this.channelAuth),
       userChats: Object.fromEntries(this.userChats),
+      claimOpenByTransport: Object.fromEntries(this.claimOpenByTransport),
     };
   }
 
@@ -112,6 +119,10 @@ export class ChallengeAuth {
           this.onNotify(`🔐 ${username} is now the admin`, "info");
         }
         return true;
+      }
+
+      if (transport && !this.isClaimOpen(transport)) {
+        return false;
       }
 
       // Temporarily override onSendMessage for this challenge if provided
@@ -348,6 +359,10 @@ export class ChallengeAuth {
     if (code === challenge.code) {
       this.trustedUsers.add(userId);
       this.rememberUserChat(userId, challenge.chatId);
+      const [transport] = userId.split(":");
+      if (transport) {
+        this.claimOpenByTransport.set(transport, false);
+      }
       this.challenges.delete(userId);
       if (this.onSaveAuth) this.onSaveAuth();
       await sendMessage("✅ Authenticated! You can now chat with the agent.");
@@ -382,6 +397,43 @@ export class ChallengeAuth {
     if (!chatId || this.userChats.get(userId) === chatId) return;
     this.userChats.set(userId, chatId);
     if (this.onSaveAuth) this.onSaveAuth();
+  }
+
+  private hasTrustedUserForTransport(transport: string): boolean {
+    for (const userId of this.trustedUsers) {
+      if (userId.startsWith(`${transport}:`)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  isClaimOpen(transport: string): boolean {
+    const explicit = this.claimOpenByTransport.get(transport);
+    if (explicit !== undefined) {
+      return explicit;
+    }
+    return !this.hasTrustedUserForTransport(transport);
+  }
+
+  releaseClaim(transport: string): number {
+    let removed = 0;
+    for (const userId of Array.from(this.trustedUsers)) {
+      if (!userId.startsWith(`${transport}:`)) continue;
+      this.trustedUsers.delete(userId);
+      this.userChats.delete(userId);
+      this.challenges.delete(userId);
+      this.blockedUsers.delete(userId);
+      removed++;
+    }
+
+    if (this.adminUserId?.startsWith(`${transport}:`)) {
+      this.adminUserId = undefined;
+    }
+
+    this.claimOpenByTransport.set(transport, true);
+    if (this.onSaveAuth) this.onSaveAuth();
+    return removed;
   }
 
   getNotificationChatIds(transport: string): string[] {
@@ -422,6 +474,7 @@ export class ChallengeAuth {
 *Authentication:*
 • First DM to bot → 6-digit code shown in terminal
 • Enter code in chat → become trusted
+• After first auth on a transport, new DM claims stay closed until released locally
 • First trusted user = admin`;
   }
 

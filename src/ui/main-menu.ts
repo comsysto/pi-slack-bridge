@@ -57,6 +57,8 @@ function showHelp(mctx: MenuContext): void {
     "  /msg-bridge disconnect            — disconnect all transports\n" +
     "  /msg-bridge configure <platform>  — set up a transport\n" +
     "  /msg-bridge widget                — toggle status widget\n" +
+    "  /msg-bridge list-sessions         — show up to 10 recent sessions\n" +
+    "  /msg-bridge switch <number>       — switch to a listed session\n" +
     "  /msg-bridge sendfile <path>       — upload local file to current Slack chat",
     "info",
   );

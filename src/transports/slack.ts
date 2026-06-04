@@ -1,12 +1,26 @@
 import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
 import type { ChallengeAuth } from "../auth/challenge-auth.js";
-import { markdownToBlocks } from "../slack-blocks.js";
+import { markdownToBlocks, splitMarkdownIntoMessages } from "../slack-blocks.js";
 import type { ExternalMessage } from "../types.js";
 import type { ITransportProvider, TransportFileOptions } from "./interface.js";
 
 // Dynamic import for ESM modules
 type App = any;
+
+const SLACK_DOWNLOAD_DIR = path.join(os.homedir(), ".pi", "msg-bridge-downloads", "slack");
+
+function ensureSlackDownloadDir(): void {
+  if (!fs.existsSync(SLACK_DOWNLOAD_DIR)) {
+    fs.mkdirSync(SLACK_DOWNLOAD_DIR, { recursive: true, mode: 0o700 });
+  }
+}
+
+function sanitizeFilename(filename: string): string {
+  const base = path.basename(filename || "file");
+  return base.replace(/[^a-zA-Z0-9._-]+/g, "_");
+}
 
 async function loadSlackBolt() {
   const slack = await import("@slack/bolt");
@@ -24,7 +38,7 @@ export class SlackProvider implements ITransportProvider {
   private messageHandler?: (message: ExternalMessage) => void;
   private errorHandler?: (error: Error) => void;
   private lastProcessedMessageId = "";
-  
+
   // Cache user info to avoid repeated API calls
   private userCache: Map<string, string> = new Map();
   // Cache channel info to detect DMs vs channels
@@ -37,6 +51,64 @@ export class SlackProvider implements ITransportProvider {
 
   get isConnected(): boolean {
     return this._isConnected;
+  }
+
+  private async downloadSlackFile(file: any): Promise<string> {
+    const downloadUrl = file.url_private_download || file.url_private;
+    if (!downloadUrl) {
+      throw new Error(`Slack file ${file.id || file.name || "unknown"} has no download URL`);
+    }
+
+    ensureSlackDownloadDir();
+    const filename = sanitizeFilename(file.name || file.title || file.id || "file");
+    const targetPath = path.join(
+      SLACK_DOWNLOAD_DIR,
+      `${Date.now()}-${file.id || "file"}-${filename}`,
+    );
+
+    const response = await fetch(downloadUrl, {
+      headers: {
+        Authorization: `Bearer ${this.config.botToken}`,
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`Slack file download failed (${response.status} ${response.statusText})`);
+    }
+
+    const buffer = Buffer.from(await response.arrayBuffer());
+    fs.writeFileSync(targetPath, buffer, { mode: 0o600 });
+    return targetPath;
+  }
+
+  private async buildIncomingContent(message: any): Promise<string | null> {
+    const text = typeof message.text === "string" ? message.text.trim() : "";
+
+    if (message.subtype === "file_share" && Array.isArray(message.files) && message.files.length > 0) {
+      const fileLines: string[] = [];
+
+      for (const file of message.files) {
+        const savedPath = await this.downloadSlackFile(file);
+        const size = typeof file.size === "number" ? `${file.size.toLocaleString()} bytes` : "size unknown";
+        const mimetype = file.mimetype || file.filetype || "unknown type";
+        fileLines.push(
+          `- ${file.name || file.title || file.id} (${mimetype}, ${size})\n  Saved to: ${savedPath}`,
+        );
+      }
+
+      const parts = [
+        `uploaded ${message.files.length === 1 ? "a file" : `${message.files.length} files`}:`,
+        ...fileLines,
+      ];
+
+      if (text) {
+        parts.push(`Comment: ${text}`);
+      }
+
+      return parts.join("\n");
+    }
+
+    return text || null;
   }
 
   async connect(): Promise<void> {
@@ -69,20 +141,23 @@ export class SlackProvider implements ITransportProvider {
 
     // Listen for all messages
     this.app.message(async ({ message, client }: any) => {
-      // Skip bot messages, message edits, deletes, etc.
-      if (message.subtype) {
+      // Skip bot messages, message edits, deletes, etc. but allow file shares.
+      if (message.subtype && message.subtype !== "file_share") {
         return;
       }
 
-      // TypeScript type guard for regular messages
-      if (!("user" in message) || !("text" in message) || !message.text) {
+      if (!("user" in message) || !("channel" in message) || !("ts" in message)) {
         return;
       }
 
       const userId = message.user;
       const channelId = message.channel;
-      const text = message.text;
       const ts = message.ts;
+
+      const content = await this.buildIncomingContent(message);
+      if (!content) {
+        return;
+      }
 
       // Filter out duplicate messages
       if (ts === this.lastProcessedMessageId) {
@@ -124,8 +199,8 @@ export class SlackProvider implements ITransportProvider {
       }
 
       // Detect bot mention: <@BOT_USER_ID>
-      const wasMentioned = this.botUserId 
-        ? text.includes(`<@${this.botUserId}>`)
+      const wasMentioned = this.botUserId
+        ? content.includes(`<@${this.botUserId}>`)
         : false;
 
       const isGroupChat = !channelInfo.isDM;
@@ -151,9 +226,9 @@ export class SlackProvider implements ITransportProvider {
       );
 
       // Handle admin commands and challenge codes in DM
-      if (!isGroupChat && (text.startsWith("/") || text.match(/^\d{6}$/))) {
+      if (!isGroupChat && (content.startsWith("/") || content.match(/^\d{6}$/))) {
         const handled = await this.auth.handleAdminCommand(
-          text,
+          content,
           channelId,
           userId,
           async (text) => await this.sendMessage(channelId, text),
@@ -173,7 +248,7 @@ export class SlackProvider implements ITransportProvider {
         const externalMessage: ExternalMessage = {
           chatId: channelId,
           transport: this.type,
-          content: text.trim(),
+          content,
           username: username,
           userId: userId,
           timestamp: new Date(parseFloat(ts) * 1000),
@@ -216,19 +291,47 @@ export class SlackProvider implements ITransportProvider {
   }
 
   async sendMessage(chatId: string, text: string): Promise<void> {
+    await this.sendMessageInThread(chatId, text);
+  }
+
+  async sendMessageInThread(
+    chatId: string,
+    text: string,
+    threadTs?: string,
+    footerText?: string,
+  ): Promise<string | undefined> {
     if (!this.app) {
       throw new Error("Slack not connected");
     }
-    if (!text?.trim()) return;
+    if (!text?.trim()) return threadTs;
 
     try {
-      const blocks = markdownToBlocks(text);
+      const messageChunks = splitMarkdownIntoMessages(text);
+      let rootThreadTs = threadTs;
 
-      await this.app.client.chat.postMessage({
-        channel: chatId,
-        text: text, // Fallback for notifications/accessibility
-        blocks: blocks,
-      });
+      for (let i = 0; i < messageChunks.length; i++) {
+        const chunk = messageChunks[i];
+        const blocks = markdownToBlocks(chunk);
+        if (footerText && i === messageChunks.length - 1) {
+          blocks.push({
+            type: "context",
+            elements: [{ type: "mrkdwn", text: footerText }],
+          });
+        }
+
+        const response = await this.app.client.chat.postMessage({
+          channel: chatId,
+          text: chunk,
+          blocks,
+          thread_ts: rootThreadTs,
+        });
+
+        if (!rootThreadTs) {
+          rootThreadTs = response.ts;
+        }
+      }
+
+      return rootThreadTs;
     } catch (error) {
       throw new Error(`Slack send failed: ${(error as Error).message}`);
     }
@@ -236,8 +339,42 @@ export class SlackProvider implements ITransportProvider {
 
   async sendTyping(_chatId: string): Promise<void> {
     // Slack doesn't support typing indicators for bots
-    // We could potentially add a reaction or use a "thinking" message
-    // but for now we'll just skip it
+  }
+
+  async addReaction(chatId: string, messageTs: string, emoji: string): Promise<void> {
+    if (!this.app) {
+      throw new Error("Slack not connected");
+    }
+
+    try {
+      await this.app.client.reactions.add({
+        channel: chatId,
+        timestamp: messageTs,
+        name: emoji,
+      });
+    } catch (error: any) {
+      const code = error?.data?.error || error?.code || error?.message;
+      if (code === "already_reacted") return;
+      throw new Error(`Slack add reaction failed: ${String(code)}`);
+    }
+  }
+
+  async removeReaction(chatId: string, messageTs: string, emoji: string): Promise<void> {
+    if (!this.app) {
+      throw new Error("Slack not connected");
+    }
+
+    try {
+      await this.app.client.reactions.remove({
+        channel: chatId,
+        timestamp: messageTs,
+        name: emoji,
+      });
+    } catch (error: any) {
+      const code = error?.data?.error || error?.code || error?.message;
+      if (code === "no_reaction" || code === "message_not_found") return;
+      throw new Error(`Slack remove reaction failed: ${String(code)}`);
+    }
   }
 
   async sendFile(chatId: string, filePath: string, options?: TransportFileOptions): Promise<void> {

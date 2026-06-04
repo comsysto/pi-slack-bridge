@@ -135,8 +135,24 @@ The user enters the code in the bot chat to become a trusted user.
 | `/msg-bridge disconnect` | Disconnect all transports |
 | `/msg-bridge configure <platform> [token]` | Set transport credentials via CLI |
 | `/msg-bridge widget` | Toggle status widget on/off |
+| `/msg-bridge new <cwd>` | Start a fresh bridge session for a directory and retire older background sessions |
 | `/msg-bridge toggletools` | Toggle tool call visibility in remote messages |
 | `/msg-bridge help` | Show command reference |
+
+### Remote dot commands (in DM with the bot)
+
+Trusted users can send lightweight remote commands directly in chat:
+
+| Command | Description |
+|---|---|
+| `.` | Show the remote command list |
+| `.bridge status` | Show bridge connection status |
+| `.bridge connect` | Connect the current session |
+| `.bridge disconnect` | Disconnect the current session |
+| `.bridge new <cwd>` | Start a fresh bridge session for a directory and clean up older background sessions |
+| `.bridge sendfile <path>` | Upload a local file to the current Slack chat |
+| `.skill <name> <args>` | Run a registered skill command |
+| `.prompt <name> <args>` | Run a registered prompt template |
 
 ### Admin commands (in DM with the bot)
 

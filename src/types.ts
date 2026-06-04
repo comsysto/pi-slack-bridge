@@ -49,6 +49,7 @@ export interface MsgBridgeConfig {
     adminUserId?: string;
     channels?: Record<string, { enabled: boolean; mode: "all" | "mentions" | "trusted-only" }>;
     userChats?: Record<string, string>;
+    claimOpenByTransport?: Record<string, boolean>;
   };
   hideToolCalls?: boolean;
   autoConnect?: boolean;

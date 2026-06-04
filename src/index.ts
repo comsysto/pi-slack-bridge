@@ -1,5 +1,8 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -8,6 +11,7 @@ import { ChallengeAuth } from "./auth/challenge-auth.js";
 import { loadConfig, saveConfig } from "./config.js";
 import { extractTextFromMessage, formatToolCalls, hasToolCalls, splitMessage, truncate } from "./formatting.js";
 import { acquireLock, forceAcquireLock, getInstanceId, isCurrentLockOwner, isLockHeldLocally, releaseLock } from "./lock.js";
+import { buildTmuxConnectSummary, resolvePathInput, runTmuxPiConnect } from "./tmux-connect.js";
 import { DiscordProvider } from "./transports/discord.js";
 import { TransportManager } from "./transports/manager.js";
 import { MatrixProvider } from "./transports/matrix.js";
@@ -22,6 +26,8 @@ import { createStatusWidget } from "./ui/status-widget.js";
  * pi-remote-pilot extension
  * Bridges messenger apps (Telegram, WhatsApp, Slack, Discord) into pi
  */
+const execFileAsync = promisify(execFile);
+
 export default function (pi: ExtensionAPI): void {
   const transportManager = new TransportManager();
   let pendingRemoteChat: PendingRemoteChat | null = null;
@@ -30,6 +36,8 @@ export default function (pi: ExtensionAPI): void {
   let ownershipTimer: NodeJS.Timeout | undefined;
   let ownershipCheckInProgress = false;
   let transportInitialization: Promise<void> = Promise.resolve();
+  const slackSessionThreads = new Map<string, string>();
+  let activeSlackReaction: { chatId: string; messageId: string } | null = null;
 
   function ownsBridgeConnection(): boolean {
     return isLockHeldLocally() && isCurrentLockOwner();
@@ -77,12 +85,40 @@ export default function (pi: ExtensionAPI): void {
     const contextWindow = usage?.contextWindow ?? ctx.model?.contextWindow;
 
     if (!usage || !contextWindow) {
-      return "Unknown";
+      return "? / ?";
     }
 
-    const percent = usage.percent === null ? "?" : `${Math.round(usage.percent)}%`;
-    const tokens = usage.tokens === null ? "?" : usage.tokens.toLocaleString();
-    return `${tokens} / ${contextWindow.toLocaleString()} tokens (${percent})`;
+    const percent = usage.percent === null ? "?" : `${usage.percent.toFixed(1)}%`;
+    const windowK = `${Math.round(contextWindow / 1000)}k`;
+    return `${percent} / ${windowK}`;
+  }
+
+  function formatDisplayPath(cwd: string): string {
+    const home = os.homedir();
+    if (cwd === home) return "~";
+    if (cwd.startsWith(`${home}${path.sep}`)) {
+      return `~${cwd.slice(home.length)}`;
+    }
+    return cwd;
+  }
+
+  async function getGitBranch(cwd: string): Promise<string | null> {
+    try {
+      const { stdout } = await execFileAsync("git", ["branch", "--show-current"], { cwd });
+      const branch = stdout.trim();
+      return branch || null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function buildSlackFooterText(): Promise<string> {
+    const modelProvider = ctx.model?.provider || "unknown";
+    const modelId = ctx.model?.id || "unknown";
+    const displayPath = formatDisplayPath(ctx.cwd);
+    const branch = await getGitBranch(ctx.cwd);
+    const location = branch ? `${displayPath} (${branch})` : displayPath;
+    return `${formatContextUsage()} · (${modelProvider}) ${modelId} · ${location}`;
   }
 
   function getLastAssistantMessageText(): string | null {
@@ -142,6 +178,72 @@ export default function (pi: ExtensionAPI): void {
     return filePath;
   }
 
+  function getSlackTransport(): SlackProvider | null {
+    const transport = transportManager.getTransport("slack");
+    return transport instanceof SlackProvider ? transport : null;
+  }
+
+  async function clearSlackWorkingReaction(): Promise<void> {
+    if (!activeSlackReaction) return;
+
+    const reactionTarget = activeSlackReaction;
+    activeSlackReaction = null;
+    const slackTransport = getSlackTransport();
+    if (!slackTransport) return;
+
+    try {
+      await slackTransport.removeReaction(reactionTarget.chatId, reactionTarget.messageId, "hourglass_flowing_sand");
+    } catch {
+      // Ignore cleanup failures
+    }
+  }
+
+  async function setSlackWorkingReaction(remoteChat: PendingRemoteChat | null): Promise<void> {
+    if (!remoteChat || remoteChat.transport !== "slack") {
+      await clearSlackWorkingReaction();
+      return;
+    }
+
+    if (
+      activeSlackReaction &&
+      activeSlackReaction.chatId === remoteChat.chatId &&
+      activeSlackReaction.messageId === remoteChat.messageId
+    ) {
+      return;
+    }
+
+    await clearSlackWorkingReaction();
+    const slackTransport = getSlackTransport();
+    if (!slackTransport) return;
+
+    try {
+      await slackTransport.addReaction(remoteChat.chatId, remoteChat.messageId, "hourglass_flowing_sand");
+      activeSlackReaction = {
+        chatId: remoteChat.chatId,
+        messageId: remoteChat.messageId,
+      };
+    } catch {
+      // Ignore reaction failures so normal messaging still works
+    }
+  }
+
+  async function sendToRemoteChat(chatId: string, transport: string, text: string): Promise<void> {
+    if (transport === "slack") {
+      const slackTransport = getSlackTransport();
+      if (slackTransport) {
+        const threadTs = slackSessionThreads.get(chatId);
+        const footerText = await buildSlackFooterText();
+        const rootThreadTs = await slackTransport.sendMessageInThread(chatId, text, threadTs, footerText);
+        if (rootThreadTs) {
+          slackSessionThreads.set(chatId, rootThreadTs);
+        }
+        return;
+      }
+    }
+
+    await transportManager.sendMessage(chatId, transport, text);
+  }
+
   async function notifySlackSessionHandover(): Promise<void> {
     const slackChats = auth.getNotificationChatIds("slack");
     if (slackChats.length === 0) {
@@ -162,11 +264,11 @@ export default function (pi: ExtensionAPI): void {
 
     for (const chatId of slackChats) {
       try {
-        await transportManager.sendMessage(chatId, "slack", handoverMessage);
+        await sendToRemoteChat(chatId, "slack", handoverMessage);
 
         for (let i = 0; i < lastAssistantChunks.length; i++) {
           const prefix = i === 0 ? "🧵 Last agent message\n\n" : "";
-          await transportManager.sendMessage(chatId, "slack", `${prefix}${lastAssistantChunks[i]}`);
+          await sendToRemoteChat(chatId, "slack", `${prefix}${lastAssistantChunks[i]}`);
         }
       } catch (_err) {
         // Ignore notification failures to avoid breaking takeover flow
@@ -260,6 +362,58 @@ export default function (pi: ExtensionAPI): void {
     updateWidget();
   }
 
+  async function startFreshBridgeSession(cwdArg?: string): Promise<string> {
+    const cwd = resolvePathInput(cwdArg?.trim() ? cwdArg : ctx.cwd, ctx.cwd);
+    const result = await runTmuxPiConnect({ cwd });
+    return buildTmuxConnectSummary(result);
+  }
+
+  async function switchToListedBridgeSession(index: number): Promise<string> {
+    const sessions = await listRecentSessions();
+    const selected = sessions[index - 1];
+    if (!selected) {
+      throw new Error(`Session #${index} is not in the current recent-session list`);
+    }
+
+    const cwd = selected.cwd === "(unknown cwd)" ? ctx.cwd : selected.cwd;
+    const result = await runTmuxPiConnect({
+      cwd,
+      piArgs: ["--session", selected.path],
+    });
+    return buildTmuxConnectSummary(result);
+  }
+
+  async function listRecentSessions(limit?: number): Promise<Array<{
+    path: string;
+    cwd: string;
+    firstPrompt: string;
+  }>> {
+    const sessions = await SessionManager.listAll();
+    const sorted = sessions
+      .sort((a, b) => b.modified.getTime() - a.modified.getTime())
+      .map((session) => ({
+        path: session.path,
+        cwd: session.cwd || "(unknown cwd)",
+        firstPrompt: truncate((session.firstMessage || "(no prompt)").replace(/\s+/g, " ").trim(), 300),
+      }));
+
+    return limit ? sorted.slice(0, limit) : sorted;
+  }
+
+  async function buildSessionListText(limit: number = 10): Promise<string> {
+    const sessions = await listRecentSessions(limit);
+    if (sessions.length === 0) {
+      return "No previous sessions found.";
+    }
+
+    const lines = ["Previous sessions", ""];
+    sessions.forEach((session, index) => {
+      lines.push(`${index + 1}. **${session.cwd}** — ${session.firstPrompt}`);
+    });
+
+    return lines.join("\n").trimEnd();
+  }
+
   function buildBridgeStatusText(): string {
     const stats = auth.getStats();
     const status = transportManager.getStatus();
@@ -323,6 +477,9 @@ export default function (pi: ExtensionAPI): void {
       "- `.bridge status`",
       "- `.bridge connect`",
       "- `.bridge disconnect`",
+      "- `.bridge new [cwd]`",
+      "- `.bridge list-sessions [number]`",
+      "- `.bridge switch <number>`",
       "- `.bridge sendfile <path>`",
     ];
 
@@ -333,7 +490,7 @@ export default function (pi: ExtensionAPI): void {
     const maxLen = message.transport === "slack" ? 12000 : 4000;
     const chunks = splitMessage(text, maxLen);
     for (const chunk of chunks) {
-      await transportManager.sendMessage(message.chatId, message.transport, chunk);
+      await sendToRemoteChat(message.chatId, message.transport, chunk);
     }
   }
 
@@ -348,6 +505,20 @@ export default function (pi: ExtensionAPI): void {
 
   async function handleRemoteCommand(message: ExternalMessage): Promise<boolean> {
     const trimmed = message.content.trim();
+    const lowered = trimmed.toLowerCase();
+
+    if (message.transport === "slack" && lowered === "stop") {
+      if (ctx.isIdle()) {
+        await sendRemoteText(message, "Nothing is currently running.");
+      } else {
+        await clearSlackWorkingReaction();
+        pendingRemoteChat = null;
+        ctx.abort();
+        await sendRemoteText(message, "🛑 Stopped current response.");
+      }
+      return true;
+    }
+
     if (trimmed === ".") {
       await sendRemoteText(message, buildRemoteCommandList());
       return true;
@@ -406,6 +577,9 @@ export default function (pi: ExtensionAPI): void {
               "- `.bridge status`",
               "- `.bridge connect`",
               "- `.bridge disconnect`",
+              "- `.bridge new [cwd]`",
+              "- `.bridge list-sessions [number]`",
+              "- `.bridge switch <number>`",
               "- `.bridge sendfile <path>`",
             ].join("\n"),
           );
@@ -428,6 +602,41 @@ export default function (pi: ExtensionAPI): void {
           await disconnectCurrentSession();
           await sendRemoteText(message, "🔌 Disconnected from all transports");
           return true;
+        case "new":
+          try {
+            const summary = await startFreshBridgeSession(rest || undefined);
+            await sendRemoteText(message, summary);
+          } catch (err) {
+            await sendRemoteText(message, `❌ Failed to start fresh bridge session: ${(err as Error).message}`);
+          }
+          return true;
+        case "list-sessions":
+        case "listsessions":
+        case "list-session":
+        case "listsession": {
+          const limit = rest ? parseInt(rest, 10) : 10;
+          if (!Number.isFinite(limit) || limit < 1) {
+            await sendRemoteText(message, "Usage: `.bridge list-sessions [number]`");
+            return true;
+          }
+          await sendRemoteText(message, await buildSessionListText(limit));
+          return true;
+        }
+        case "switch": {
+          const index = parseInt(rest, 10);
+          if (!Number.isFinite(index) || index < 1) {
+            await sendRemoteText(message, "Usage: `.bridge switch <number>`");
+            return true;
+          }
+
+          try {
+            const summary = await switchToListedBridgeSession(index);
+            await sendRemoteText(message, summary);
+          } catch (err) {
+            await sendRemoteText(message, `❌ Failed to switch session: ${(err as Error).message}`);
+          }
+          return true;
+        }
         case "sendfile":
           if (!rest) {
             await sendRemoteText(message, "Usage: `.bridge sendfile <path>`");
@@ -612,6 +821,7 @@ export default function (pi: ExtensionAPI): void {
         }
 
         pendingRemoteChat = toPendingRemoteChat(msg);
+        await setSlackWorkingReaction(pendingRemoteChat);
         const taggedMessage = `[📱 @${msg.username} via ${msg.transport}]: ${msg.content}`;
         if (ctx.isIdle()) {
           pi.sendUserMessage(taggedMessage);
@@ -632,6 +842,7 @@ export default function (pi: ExtensionAPI): void {
       ownershipCheckInProgress = true;
 
       void (async () => {
+        await clearSlackWorkingReaction();
         await transportManager.disconnectAll();
         pendingRemoteChat = null;
         releaseLock();
@@ -668,6 +879,7 @@ export default function (pi: ExtensionAPI): void {
   pi.on("turn_start", async (_event, _context) => {
     if (pendingRemoteChat && ownsBridgeConnection()) {
       try {
+        await setSlackWorkingReaction(pendingRemoteChat);
         await transportManager.sendTyping(
           pendingRemoteChat.chatId,
           pendingRemoteChat.transport
@@ -713,18 +925,20 @@ export default function (pi: ExtensionAPI): void {
       const maxChunkLen = pendingRemoteChat.transport === "slack" ? 12000 : 4000;
       const chunks = splitMessage(fullText, maxChunkLen);
       for (const chunk of chunks) {
-        await transportManager.sendMessage(
+        await sendToRemoteChat(
           pendingRemoteChat.chatId,
           pendingRemoteChat.transport,
-          chunk
+          chunk,
         );
       }
 
       if (!hasPendingTools) {
+        await clearSlackWorkingReaction();
         pendingRemoteChat = null;
       }
     } catch (err) {
       const transport = pendingRemoteChat?.transport ?? "unknown";
+      await clearSlackWorkingReaction();
       ctx.ui.notify(
         `Failed to send response to ${transport}: ${(err as Error).message}`,
         "error"
@@ -741,6 +955,7 @@ export default function (pi: ExtensionAPI): void {
       clearInterval(ownershipTimer);
       ownershipTimer = undefined;
     }
+    await clearSlackWorkingReaction();
     await transportManager.disconnectAll();
     releaseLock();
   });
@@ -749,7 +964,7 @@ export default function (pi: ExtensionAPI): void {
    * /msg-bridge command - show status or manage connections
    */
   pi.registerCommand("msg-bridge", {
-    description: "Manage remote messenger connections (help|status|connect|disconnect|configure|widget)",
+    description: "Manage remote messenger connections (help|status|connect|disconnect|configure|widget|new|list-sessions|switch)",
     handler: async (args: string, context) => {
       const parts = args.trim().split(/\s+/).filter(p => p.length > 0);
       const subcommand = parts[0] || "";
@@ -788,7 +1003,11 @@ export default function (pi: ExtensionAPI): void {
           "/msg-bridge configure matrix <homeserver-url> <access-token>",
           "                              Configure Matrix (Element X, etc)",
           "/msg-bridge widget            Toggle status widget on/off",
+          "/msg-bridge new [cwd]         Start a fresh bridge session for current or specified directory",
+          "/msg-bridge list-sessions [number]  Show recent sessions (default 10)",
+          "/msg-bridge switch <number>   Switch to one of all recent sessions",
           "/msg-bridge sendfile <path>   Upload a local file to current Slack chat",
+          "/msg-bridge releaseclaim [transport]  Re-open claiming for a transport",
           "/msg-bridge toggletools       Toggle tool call visibility",
           "",
           "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
@@ -980,6 +1199,51 @@ export default function (pi: ExtensionAPI): void {
         break;
       }
 
+      case "new": {
+        const cwdArg = parts.slice(1).join(" ").trim();
+
+        try {
+          const summary = await startFreshBridgeSession(cwdArg || undefined);
+          context.ui.notify(summary, "info");
+        } catch (err) {
+          context.ui.notify(`❌ Failed to start fresh bridge session: ${(err as Error).message}`, "error");
+        }
+        break;
+      }
+
+      case "list-sessions":
+      case "list-session": {
+        const limitArg = parts[1];
+        const limit = limitArg ? parseInt(limitArg, 10) : 10;
+        if (!Number.isFinite(limit) || limit < 1) {
+          context.ui.notify("Usage: /msg-bridge list-sessions [number]", "error");
+          break;
+        }
+
+        try {
+          context.ui.notify(await buildSessionListText(limit), "info");
+        } catch (err) {
+          context.ui.notify(`❌ Failed to list sessions: ${(err as Error).message}`, "error");
+        }
+        break;
+      }
+
+      case "switch": {
+        const index = parseInt(parts[1] || "", 10);
+        if (!Number.isFinite(index) || index < 1) {
+          context.ui.notify("Usage: /msg-bridge switch <number>", "error");
+          break;
+        }
+
+        try {
+          const summary = await switchToListedBridgeSession(index);
+          context.ui.notify(summary, "info");
+        } catch (err) {
+          context.ui.notify(`❌ Failed to switch session: ${(err as Error).message}`, "error");
+        }
+        break;
+      }
+
       case "sendfile": {
         const fileArg = parts.slice(1).join(" ").trim();
         if (!fileArg) {
@@ -993,6 +1257,16 @@ export default function (pi: ExtensionAPI): void {
         } catch (err) {
           context.ui.notify(`❌ File upload failed: ${(err as Error).message}`, "error");
         }
+        break;
+      }
+
+      case "releaseclaim": {
+        const transport = (parts[1] || "slack").toLowerCase();
+        const removed = auth.releaseClaim(transport);
+        context.ui.notify(
+          `🔓 Re-opened ${transport} claim${removed > 0 ? ` (removed ${removed} trusted user${removed === 1 ? "" : "s"})` : ""}`,
+          "info",
+        );
         break;
       }
 
