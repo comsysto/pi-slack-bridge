@@ -172,6 +172,7 @@ export default function (pi: ExtensionAPI): void {
       {
         title: options?.title,
         initialComment: options?.initialComment,
+        threadId: slackSessionThreads.get(remoteChat.chatId),
       },
     );
 

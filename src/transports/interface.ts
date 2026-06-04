@@ -3,6 +3,7 @@ import type { ExternalMessage } from "../types.js";
 export interface TransportFileOptions {
   title?: string;
   initialComment?: string;
+  threadId?: string;
 }
 
 /**

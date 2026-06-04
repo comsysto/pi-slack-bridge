@@ -397,6 +397,7 @@ export class SlackProvider implements ITransportProvider {
         filename: path.basename(filePath),
         title: options?.title,
         initial_comment: options?.initialComment,
+        thread_ts: options?.threadId,
       });
     } catch (error) {
       throw new Error(`Slack file upload failed: ${(error as Error).message}`);
