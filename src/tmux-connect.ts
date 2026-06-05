@@ -11,6 +11,8 @@ export interface TmuxConnectOptions {
   startupWaitMs?: number;
   postSendWaitMs?: number;
   cleanupDelayMs?: number;
+  attachClient?: boolean;
+  cleanupOtherSessions?: boolean;
 }
 
 export interface TmuxConnectResult {
@@ -50,6 +52,8 @@ export async function runTmuxPiConnect(options: TmuxConnectOptions): Promise<Tmu
   const cleanupDelayMs = options.cleanupDelayMs ?? 3000;
   const piBin = options.piBin || "pi";
   const piArgs = options.piArgs || [];
+  const attachClient = options.attachClient ?? true;
+  const cleanupOtherSessions = options.cleanupOtherSessions ?? true;
 
   ensureExecutable("tmux");
   ensureExecutable(piBin);
@@ -73,7 +77,9 @@ export async function runTmuxPiConnect(options: TmuxConnectOptions): Promise<Tmu
   ]);
   await sleep(startupWaitMs);
 
-  runTmux(["switch-client", "-t", sessionName], { allowFailure: true });
+  if (attachClient) {
+    runTmux(["switch-client", "-t", sessionName], { allowFailure: true });
+  }
   runTmux(["send-keys", "-t", sessionName, bridgeCommand]);
   await sleep(300);
   runTmux(["send-keys", "-t", sessionName, "Enter"]);
@@ -87,14 +93,16 @@ export async function runTmuxPiConnect(options: TmuxConnectOptions): Promise<Tmu
     "-160",
   ]).stdout.trimEnd();
 
-  scheduleCleanupOtherSessions(sessionName, cleanupDelayMs);
+  if (cleanupOtherSessions) {
+    scheduleCleanupOtherSessions(sessionName, cleanupDelayMs);
+  }
 
   return {
     sessionName,
     cwd,
     bridgeCommand,
     paneOutput,
-    cleanupScheduled: true,
+    cleanupScheduled: cleanupOtherSessions,
   };
 }
 

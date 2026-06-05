@@ -204,6 +204,10 @@ export class SlackProvider implements ITransportProvider {
         : false;
 
       const isGroupChat = !channelInfo.isDM;
+      const effectiveThreadId = !isGroupChat
+        ? (typeof message.thread_ts === "string" && message.thread_ts.trim() ? message.thread_ts : ts)
+        : undefined;
+      const isThreadReply = !isGroupChat && typeof message.thread_ts === "string" && message.thread_ts.trim().length > 0;
 
       // Check authorization
       const sendMessageToUser = async (cId: string, text: string) => {
@@ -255,6 +259,8 @@ export class SlackProvider implements ITransportProvider {
           messageId: ts,
           isGroupChat,
           wasMentioned,
+          threadId: effectiveThreadId,
+          isThreadReply,
         };
 
         this.messageHandler(externalMessage);

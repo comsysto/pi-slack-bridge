@@ -20,6 +20,10 @@ export interface ExternalMessage {
   isGroupChat: boolean;
   /** Was the bot mentioned? (for group chats) */
   wasMentioned?: boolean;
+  /** Transport-specific reply thread/root identifier, when available */
+  threadId?: string;
+  /** Whether the incoming message was sent as a reply inside an existing thread */
+  isThreadReply?: boolean;
 }
 
 /**
@@ -51,6 +55,11 @@ export interface MsgBridgeConfig {
     userChats?: Record<string, string>;
     claimOpenByTransport?: Record<string, boolean>;
   };
+  slackRouting?: {
+    threadsByKey?: Record<string, { sessionPath: string; updatedAt: string }>;
+    activeThreadBySessionChat?: Record<string, { threadTs: string; updatedAt: string }>;
+    lastAssistantDeliveryByThread?: Record<string, { sessionPath: string; assistantEntryId: string; updatedAt: string }>;
+  };
   hideToolCalls?: boolean;
   autoConnect?: boolean;
   showWidget?: boolean;
@@ -65,6 +74,8 @@ export interface PendingRemoteChat {
   transport: string;
   username: string;
   messageId: string;
+  threadId?: string;
+  isThreadReply?: boolean;
 }
 
 /**

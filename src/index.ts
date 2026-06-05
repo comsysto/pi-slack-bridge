@@ -38,6 +38,103 @@ export default function (pi: ExtensionAPI): void {
   let transportInitialization: Promise<void> = Promise.resolve();
   const slackSessionThreads = new Map<string, string>();
   let activeSlackReaction: { chatId: string; messageId: string } | null = null;
+  const handoffDir = path.join(os.homedir(), ".pi", "msg-bridge-handoffs");
+
+  function getCurrentSessionFile(): string | undefined {
+    return ctx.sessionManager.getSessionFile();
+  }
+
+  function getSlackThreadKey(chatId: string, threadTs: string): string {
+    return `${chatId}:${threadTs}`;
+  }
+
+  function getSlackSessionChatKey(sessionPath: string, chatId: string): string {
+    return `${sessionPath}:${chatId}`;
+  }
+
+  function getSlackRoutingState() {
+    const config = loadConfig();
+    const threadsByKey = { ...(config.slackRouting?.threadsByKey ?? {}) };
+    const activeThreadBySessionChat = { ...(config.slackRouting?.activeThreadBySessionChat ?? {}) };
+    const lastAssistantDeliveryByThread = { ...(config.slackRouting?.lastAssistantDeliveryByThread ?? {}) };
+    return { config, threadsByKey, activeThreadBySessionChat, lastAssistantDeliveryByThread };
+  }
+
+  function rememberSlackThreadForSession(chatId: string, threadTs: string, sessionPath?: string): void {
+    if (!threadTs) return;
+
+    slackSessionThreads.set(chatId, threadTs);
+
+    const resolvedSessionPath = sessionPath ?? getCurrentSessionFile();
+    if (!resolvedSessionPath) return;
+
+    const { config, threadsByKey, activeThreadBySessionChat, lastAssistantDeliveryByThread } = getSlackRoutingState();
+    const updatedAt = new Date().toISOString();
+    threadsByKey[getSlackThreadKey(chatId, threadTs)] = {
+      sessionPath: resolvedSessionPath,
+      updatedAt,
+    };
+    activeThreadBySessionChat[getSlackSessionChatKey(resolvedSessionPath, chatId)] = {
+      threadTs,
+      updatedAt,
+    };
+    config.slackRouting = { threadsByKey, activeThreadBySessionChat, lastAssistantDeliveryByThread };
+    saveConfig(config);
+  }
+
+  function markLatestAssistantDeliveredToSlackThread(chatId: string, threadTs: string, sessionPath?: string): void {
+    if (!threadTs) return;
+
+    const resolvedSessionPath = sessionPath ?? getCurrentSessionFile();
+    const lastAssistantMessage = getLastAssistantMessageInfo();
+    if (!resolvedSessionPath || !lastAssistantMessage) return;
+
+    const { config, threadsByKey, activeThreadBySessionChat, lastAssistantDeliveryByThread } = getSlackRoutingState();
+    lastAssistantDeliveryByThread[getSlackThreadKey(chatId, threadTs)] = {
+      sessionPath: resolvedSessionPath,
+      assistantEntryId: lastAssistantMessage.entryId,
+      updatedAt: new Date().toISOString(),
+    };
+    config.slackRouting = { threadsByKey, activeThreadBySessionChat, lastAssistantDeliveryByThread };
+    saveConfig(config);
+  }
+
+  function hasLatestAssistantBeenDeliveredToSlackThread(chatId: string, threadTs: string, sessionPath?: string): boolean {
+    const resolvedSessionPath = sessionPath ?? getCurrentSessionFile();
+    const lastAssistantMessage = getLastAssistantMessageInfo();
+    if (!resolvedSessionPath || !lastAssistantMessage) return false;
+
+    const { lastAssistantDeliveryByThread } = getSlackRoutingState();
+    const record = lastAssistantDeliveryByThread[getSlackThreadKey(chatId, threadTs)];
+    return record?.sessionPath === resolvedSessionPath && record?.assistantEntryId === lastAssistantMessage.entryId;
+  }
+
+  function getSlackThreadOwnerSession(chatId: string, threadTs?: string): string | undefined {
+    if (!threadTs) return undefined;
+    const { threadsByKey } = getSlackRoutingState();
+    return threadsByKey[getSlackThreadKey(chatId, threadTs)]?.sessionPath;
+  }
+
+  function getRememberedSlackThreadForCurrentSession(chatId: string): string | undefined {
+    const inMemory = slackSessionThreads.get(chatId);
+    if (inMemory) return inMemory;
+
+    const sessionPath = getCurrentSessionFile();
+    if (!sessionPath) return undefined;
+
+    const { activeThreadBySessionChat } = getSlackRoutingState();
+    const threadTs = activeThreadBySessionChat[getSlackSessionChatKey(sessionPath, chatId)]?.threadTs;
+    if (threadTs) {
+      slackSessionThreads.set(chatId, threadTs);
+    }
+    return threadTs;
+  }
+
+  function ensureHandoffDir(): void {
+    if (!fs.existsSync(handoffDir)) {
+      fs.mkdirSync(handoffDir, { recursive: true, mode: 0o700 });
+    }
+  }
 
   function ownsBridgeConnection(): boolean {
     return isLockHeldLocally() && isCurrentLockOwner();
@@ -53,6 +150,8 @@ export default function (pi: ExtensionAPI): void {
       transport: message.transport,
       username: message.username,
       messageId: message.messageId,
+      threadId: message.threadId,
+      isThreadReply: message.isThreadReply,
     };
   }
 
@@ -118,10 +217,11 @@ export default function (pi: ExtensionAPI): void {
     const displayPath = formatDisplayPath(ctx.cwd);
     const branch = await getGitBranch(ctx.cwd);
     const location = branch ? `${displayPath} (${branch})` : displayPath;
-    return `${formatContextUsage()} · (${modelProvider}) ${modelId} · ${location}`;
+    const firstPrompt = truncate(getFirstSessionPrompt().replace(/\s+/g, " ").trim(), 120);
+    return `${location} · ${formatContextUsage()} · (${modelProvider}) ${modelId} · ${firstPrompt}`;
   }
 
-  function getLastAssistantMessageText(): string | null {
+  function getLastAssistantMessageInfo(): { entryId: string; text: string } | null {
     const branch = ctx.sessionManager.getBranch();
 
     for (let i = branch.length - 1; i >= 0; i--) {
@@ -131,12 +231,16 @@ export default function (pi: ExtensionAPI): void {
       if (entry.message?.stopReason && entry.message.stopReason !== "stop") continue;
 
       const text = extractTextFromMessage(entry.message as AssistantMessage).trim();
-      if (text) {
-        return text;
+      if (text && typeof entry.id === "string" && entry.id) {
+        return { entryId: entry.id, text };
       }
     }
 
     return null;
+  }
+
+  function getLastAssistantMessageText(): string | null {
+    return getLastAssistantMessageInfo()?.text ?? null;
   }
 
   async function sendSlackFileToCurrentChat(
@@ -165,6 +269,11 @@ export default function (pi: ExtensionAPI): void {
       throw new Error(`Not a file: ${filePath}`);
     }
 
+    const threadId = remoteChat.threadId || getRememberedSlackThreadForCurrentSession(remoteChat.chatId);
+    if (threadId) {
+      rememberSlackThreadForSession(remoteChat.chatId, threadId);
+    }
+
     await transportManager.sendFile(
       remoteChat.chatId,
       "slack",
@@ -172,7 +281,7 @@ export default function (pi: ExtensionAPI): void {
       {
         title: options?.title,
         initialComment: options?.initialComment,
-        threadId: slackSessionThreads.get(remoteChat.chatId),
+        threadId,
       },
     );
 
@@ -228,21 +337,58 @@ export default function (pi: ExtensionAPI): void {
     }
   }
 
-  async function sendToRemoteChat(chatId: string, transport: string, text: string): Promise<void> {
+  async function sendToRemoteChat(
+    chatId: string,
+    transport: string,
+    text: string,
+    options?: {
+      threadId?: string;
+      forceTopLevel?: boolean;
+      rememberThreadForSessionPath?: string;
+    },
+  ): Promise<string | undefined> {
     if (transport === "slack") {
       const slackTransport = getSlackTransport();
       if (slackTransport) {
-        const threadTs = slackSessionThreads.get(chatId);
+        const threadTs = options?.forceTopLevel
+          ? undefined
+          : (options?.threadId || getRememberedSlackThreadForCurrentSession(chatId));
         const footerText = await buildSlackFooterText();
         const rootThreadTs = await slackTransport.sendMessageInThread(chatId, text, threadTs, footerText);
         if (rootThreadTs) {
-          slackSessionThreads.set(chatId, rootThreadTs);
+          rememberSlackThreadForSession(chatId, rootThreadTs, options?.rememberThreadForSessionPath);
         }
-        return;
+        return rootThreadTs;
       }
     }
 
     await transportManager.sendMessage(chatId, transport, text);
+    return undefined;
+  }
+
+  async function replayLastAssistantMessageToSlackThread(remoteChat: PendingRemoteChat): Promise<void> {
+    if (remoteChat.transport !== "slack" || !remoteChat.threadId) {
+      return;
+    }
+
+    if (hasLatestAssistantBeenDeliveredToSlackThread(remoteChat.chatId, remoteChat.threadId)) {
+      return;
+    }
+
+    const lastAssistantMessage = getLastAssistantMessageText();
+    if (!lastAssistantMessage) {
+      return;
+    }
+
+    const chunks = splitMessage(lastAssistantMessage, 12000);
+    for (let i = 0; i < chunks.length; i++) {
+      const prefix = i === 0 ? "🧵 Last agent message\n\n" : "";
+      await sendToRemoteChat(remoteChat.chatId, "slack", `${prefix}${chunks[i]}`, {
+        threadId: remoteChat.threadId,
+      });
+    }
+
+    markLatestAssistantDeliveredToSlackThread(remoteChat.chatId, remoteChat.threadId);
   }
 
   async function notifySlackSessionHandover(): Promise<void> {
@@ -265,11 +411,19 @@ export default function (pi: ExtensionAPI): void {
 
     for (const chatId of slackChats) {
       try {
-        await sendToRemoteChat(chatId, "slack", handoverMessage);
+        const threadTs = await sendToRemoteChat(chatId, "slack", handoverMessage, {
+          forceTopLevel: true,
+        });
 
         for (let i = 0; i < lastAssistantChunks.length; i++) {
           const prefix = i === 0 ? "🧵 Last agent message\n\n" : "";
-          await sendToRemoteChat(chatId, "slack", `${prefix}${lastAssistantChunks[i]}`);
+          await sendToRemoteChat(chatId, "slack", `${prefix}${lastAssistantChunks[i]}`, {
+            threadId: threadTs,
+          });
+        }
+
+        if (threadTs && lastAssistantChunks.length > 0) {
+          markLatestAssistantDeliveredToSlackThread(chatId, threadTs);
         }
       } catch (_err) {
         // Ignore notification failures to avoid breaking takeover flow
@@ -280,6 +434,7 @@ export default function (pi: ExtensionAPI): void {
   async function connectCurrentSession(options?: {
     respectAutoConnect?: boolean;
     showTakeoverNotice?: boolean;
+    notifySlackHandover?: boolean;
   }): Promise<boolean> {
     await transportInitialization;
 
@@ -310,7 +465,7 @@ export default function (pi: ExtensionAPI): void {
     try {
       await transportManager.connectAll();
       updateWidget();
-      if (tookOver) {
+      if (tookOver && options?.notifySlackHandover !== false) {
         await notifySlackSessionHandover();
       }
       return tookOver;
@@ -487,20 +642,129 @@ export default function (pi: ExtensionAPI): void {
     return lines.join("\n");
   }
 
+  function isExplicitRemoteSwitchCommand(message: ExternalMessage): boolean {
+    return /^\.bridge\s+switch(?:\s|$)/i.test(message.content.trim());
+  }
+
   async function sendRemoteText(message: ExternalMessage, text: string): Promise<void> {
     const maxLen = message.transport === "slack" ? 12000 : 4000;
     const chunks = splitMessage(text, maxLen);
     for (const chunk of chunks) {
-      await sendToRemoteChat(message.chatId, message.transport, chunk);
+      await sendToRemoteChat(message.chatId, message.transport, chunk, {
+        threadId: message.threadId,
+      });
     }
   }
 
   async function forwardRemoteCommandToPi(message: ExternalMessage, text: string): Promise<void> {
     pendingRemoteChat = toPendingRemoteChat(message);
+    const explicitSwitchCommand = isExplicitRemoteSwitchCommand(message);
+
+    if (message.transport === "slack" && message.threadId && !explicitSwitchCommand) {
+      rememberSlackThreadForSession(message.chatId, message.threadId);
+    }
     if (ctx.isIdle()) {
       pi.sendUserMessage(text);
     } else {
       pi.sendUserMessage(text, { deliverAs: "followUp" });
+    }
+  }
+
+  async function handoffSlackThreadToSession(message: ExternalMessage, targetSessionPath: string): Promise<void> {
+    const sessions = await SessionManager.listAll();
+    const targetSession = sessions.find((session) => session.path === targetSessionPath);
+    if (!targetSession) {
+      throw new Error(`Mapped Slack thread session not found: ${targetSessionPath}`);
+    }
+
+    ensureHandoffDir();
+    const handoffFile = path.join(
+      handoffDir,
+      `handoff-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}.json`,
+    );
+
+    fs.writeFileSync(
+      handoffFile,
+      JSON.stringify({
+        message: {
+          ...message,
+          timestamp: message.timestamp.toISOString(),
+        },
+        replayLastAssistantMessage: true,
+      }),
+      { mode: 0o600 },
+    );
+
+    try {
+      await runTmuxPiConnect({
+        cwd: targetSession.cwd || ctx.cwd,
+        piArgs: ["--session", targetSessionPath],
+        bridgeCommand: `/msg-bridge accept-handoff ${handoffFile}`,
+        attachClient: false,
+        cleanupOtherSessions: false,
+      });
+    } catch (err) {
+      try {
+        fs.unlinkSync(handoffFile);
+      } catch {
+        // Ignore cleanup failures
+      }
+      throw err;
+    }
+  }
+
+  async function maybeRouteSlackMessageToMappedSession(message: ExternalMessage): Promise<boolean> {
+    if (message.transport !== "slack" || message.isGroupChat || !message.threadId) {
+      return false;
+    }
+
+    if (isExplicitRemoteSwitchCommand(message)) {
+      return false;
+    }
+
+    const currentSessionPath = getCurrentSessionFile();
+    const mappedSessionPath = getSlackThreadOwnerSession(message.chatId, message.threadId);
+
+    if (message.isThreadReply && mappedSessionPath && mappedSessionPath !== currentSessionPath) {
+      await handoffSlackThreadToSession(message, mappedSessionPath);
+      return true;
+    }
+
+    rememberSlackThreadForSession(message.chatId, message.threadId);
+    return false;
+  }
+
+  async function handleIncomingRemoteMessage(
+    message: ExternalMessage,
+    options?: {
+      allowSessionRouting?: boolean;
+      replayLastAssistantMessage?: boolean;
+    },
+  ): Promise<void> {
+    if ((options?.allowSessionRouting ?? true) && await maybeRouteSlackMessageToMappedSession(message)) {
+      return;
+    }
+
+    const explicitSwitchCommand = isExplicitRemoteSwitchCommand(message);
+    if (message.transport === "slack" && message.threadId && !explicitSwitchCommand) {
+      rememberSlackThreadForSession(message.chatId, message.threadId);
+    }
+
+    if (options?.replayLastAssistantMessage) {
+      await replayLastAssistantMessageToSlackThread(toPendingRemoteChat(message));
+    }
+
+    if (await handleRemoteCommand(message)) {
+      return;
+    }
+
+    pendingRemoteChat = toPendingRemoteChat(message);
+    await setSlackWorkingReaction(pendingRemoteChat);
+    const taggedMessage = `[📱 @${message.username} via ${message.transport}]: ${message.content}`;
+    if (ctx.isIdle()) {
+      pi.sendUserMessage(taggedMessage);
+    } else {
+      pi.sendUserMessage(taggedMessage, { deliverAs: "followUp" });
     }
   }
 
@@ -816,20 +1080,7 @@ export default function (pi: ExtensionAPI): void {
         return;
       }
 
-      void (async () => {
-        if (await handleRemoteCommand(msg)) {
-          return;
-        }
-
-        pendingRemoteChat = toPendingRemoteChat(msg);
-        await setSlackWorkingReaction(pendingRemoteChat);
-        const taggedMessage = `[📱 @${msg.username} via ${msg.transport}]: ${msg.content}`;
-        if (ctx.isIdle()) {
-          pi.sendUserMessage(taggedMessage);
-        } else {
-          pi.sendUserMessage(taggedMessage, { deliverAs: "followUp" });
-        }
-      })().catch((err) => {
+      void handleIncomingRemoteMessage(msg).catch((err) => {
         ctx.ui.notify(`❌ Failed to handle remote message: ${(err as Error).message}`, "error");
       });
     });
@@ -925,12 +1176,23 @@ export default function (pi: ExtensionAPI): void {
       // Split long messages — use transport-appropriate limits
       const maxChunkLen = pendingRemoteChat.transport === "slack" ? 12000 : 4000;
       const chunks = splitMessage(fullText, maxChunkLen);
+      let lastSlackThreadId = pendingRemoteChat.threadId;
       for (const chunk of chunks) {
-        await sendToRemoteChat(
+        const resolvedThreadId = await sendToRemoteChat(
           pendingRemoteChat.chatId,
           pendingRemoteChat.transport,
           chunk,
+          {
+            threadId: pendingRemoteChat.threadId,
+          },
         );
+        if (pendingRemoteChat.transport === "slack" && resolvedThreadId) {
+          lastSlackThreadId = resolvedThreadId;
+        }
+      }
+
+      if (pendingRemoteChat.transport === "slack" && lastSlackThreadId) {
+        markLatestAssistantDeliveredToSlackThread(pendingRemoteChat.chatId, lastSlackThreadId);
       }
 
       if (!hasPendingTools) {
@@ -1307,6 +1569,44 @@ export default function (pi: ExtensionAPI): void {
         saveConfig(cfg3);
         const toolState = cfg3.hideToolCalls ? "hidden" : "shown";
         context.ui.notify(`🔧 Tool calls ${toolState} in remote messages`, "info");
+        break;
+      }
+
+      case "accept-handoff": {
+        const handoffFile = parts.slice(1).join(" ").trim();
+        if (!handoffFile) {
+          context.ui.notify("Usage: /msg-bridge accept-handoff <file>", "error");
+          break;
+        }
+
+        try {
+          const raw = fs.readFileSync(handoffFile, "utf-8");
+          const payload = JSON.parse(raw) as {
+            message: Omit<ExternalMessage, "timestamp"> & { timestamp: string };
+            replayLastAssistantMessage?: boolean;
+          };
+          const message: ExternalMessage = {
+            ...payload.message,
+            timestamp: new Date(payload.message.timestamp),
+          };
+
+          await connectCurrentSession({
+            showTakeoverNotice: false,
+            notifySlackHandover: false,
+          });
+          await handleIncomingRemoteMessage(message, {
+            allowSessionRouting: false,
+            replayLastAssistantMessage: payload.replayLastAssistantMessage === true,
+          });
+        } catch (err) {
+          context.ui.notify(`❌ Failed to accept msg-bridge handoff: ${(err as Error).message}`, "error");
+        } finally {
+          try {
+            fs.unlinkSync(handoffFile);
+          } catch {
+            // Ignore cleanup failures
+          }
+        }
         break;
       }
       default:
