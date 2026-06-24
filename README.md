@@ -136,8 +136,15 @@ The user enters the code in the bot chat to become a trusted user.
 | `/msg-bridge configure <platform> [token]` | Set transport credentials via CLI |
 | `/msg-bridge widget` | Toggle status widget on/off |
 | `/msg-bridge new <cwd>` | Start a fresh bridge session for a directory and retire older background sessions |
+| `/msg-bridge list-sessions [number]` | Show recent sessions (default 10) |
+| `/msg-bridge switch <number>` | Switch to one of all recent sessions |
+| `/msg-bridge sendfile <path>` | Upload a local file to current Slack chat |
+| `/msg-bridge releaseclaim [transport]` | Re-open claiming for a transport |
 | `/msg-bridge toggletools` | Toggle tool call visibility in remote messages |
 | `/msg-bridge help` | Show command reference |
+| `/msg-bridge optout` | Opt this session out of automatic bridge takeover |
+| `/msg-bridge optin` | Re-allow this session to take over the bridge |
+| `/msg-bridge optout list` | Show sessions opted out of takeover |
 
 ### Remote dot commands (in DM with the bot)
 
@@ -186,7 +193,10 @@ Example config:
   },
   "autoConnect": true,
   "showWidget": true,
-  "debug": false
+  "debug": false,
+  "optedOutSessions": [
+    "/home/user/.pi/sessions/abc-session.jsonl"
+  ]
 }
 ```
 

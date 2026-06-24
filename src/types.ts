@@ -64,6 +64,8 @@ export interface MsgBridgeConfig {
   autoConnect?: boolean;
   showWidget?: boolean;
   debug?: boolean;
+  /** Session file paths that have opted out of automatic bridge takeover */
+  optedOutSessions?: string[];
 }
 
 /**

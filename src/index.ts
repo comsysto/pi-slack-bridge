@@ -221,22 +221,65 @@ export default function (pi: ExtensionAPI): void {
     return `${location} · ${formatContextUsage()} · (${modelProvider}) ${modelId} · ${firstPrompt}`;
   }
 
-  function getLastAssistantMessageInfo(): { entryId: string; text: string } | null {
-    const branch = ctx.sessionManager.getBranch();
+  /** Safely extract text from any message (handles string content and array content) */
+  function extractTextSafe(message: { content?: unknown }): string {
+    if (!message?.content) return "";
+    if (typeof message.content === "string") return message.content;
+    if (Array.isArray(message.content)) {
+      return message.content
+        .filter((part: any) => part.type === "text")
+        .map((part: any) => part.text ?? "")
+        .join("\n");
+    }
+    return "";
+  }
 
-    for (let i = branch.length - 1; i >= 0; i--) {
-      const entry: any = branch[i];
+  /** Get all completed assistant messages from the session branch, oldest first */
+  function getAllAssistantMessages(): Array<{ entryId: string; text: string }> {
+    const branch = ctx.sessionManager.getBranch();
+    const messages: Array<{ entryId: string; text: string }> = [];
+
+    for (const entry of branch) {
       if (entry.type !== "message") continue;
       if (entry.message?.role !== "assistant") continue;
       if (entry.message?.stopReason && entry.message.stopReason !== "stop") continue;
 
-      const text = extractTextFromMessage(entry.message as AssistantMessage).trim();
+      const text = extractTextSafe(entry.message).trim();
       if (text && typeof entry.id === "string" && entry.id) {
-        return { entryId: entry.id, text };
+        messages.push({ entryId: entry.id, text });
       }
     }
 
-    return null;
+    return messages;
+  }
+
+  /** Get full conversation history (user + assistant) interleaved in order, oldest first */
+  function getConversationHistory(): Array<{ role: "user" | "assistant"; text: string }> {
+    const branch = ctx.sessionManager.getBranch();
+    const entries: Array<{ role: "user" | "assistant"; text: string }> = [];
+
+    for (const entry of branch) {
+      if (entry.type !== "message") continue;
+      if (entry.message?.role === "user") {
+        const text = extractTextSafe(entry.message).trim();
+        if (text) {
+          entries.push({ role: "user", text });
+        }
+      } else if (entry.message?.role === "assistant") {
+        if (entry.message?.stopReason && entry.message.stopReason !== "stop") continue;
+        const text = extractTextSafe(entry.message).trim();
+        if (text && typeof entry.id === "string" && entry.id) {
+          entries.push({ role: "assistant", text });
+        }
+      }
+    }
+
+    return entries;
+  }
+
+  function getLastAssistantMessageInfo(): { entryId: string; text: string } | null {
+    const messages = getAllAssistantMessages();
+    return messages.length > 0 ? messages[messages.length - 1] : null;
   }
 
   function getLastAssistantMessageText(): string | null {
@@ -366,7 +409,7 @@ export default function (pi: ExtensionAPI): void {
     return undefined;
   }
 
-  async function replayLastAssistantMessageToSlackThread(remoteChat: PendingRemoteChat): Promise<void> {
+  async function replayAllAssistantMessagesToSlackThread(remoteChat: PendingRemoteChat): Promise<void> {
     if (remoteChat.transport !== "slack" || !remoteChat.threadId) {
       return;
     }
@@ -375,23 +418,38 @@ export default function (pi: ExtensionAPI): void {
       return;
     }
 
-    const lastAssistantMessage = getLastAssistantMessageText();
-    if (!lastAssistantMessage) {
+    const conversation = getConversationHistory();
+    if (conversation.length === 0) {
       return;
     }
 
-    const chunks = splitMessage(lastAssistantMessage, 12000);
-    for (let i = 0; i < chunks.length; i++) {
-      const prefix = i === 0 ? "🧵 Last agent message\n\n" : "";
-      await sendToRemoteChat(remoteChat.chatId, "slack", `${prefix}${chunks[i]}`, {
-        threadId: remoteChat.threadId,
-      });
+    for (const entry of conversation) {
+      const text = entry.role === "user"
+        ? `🗣️ **User:** ${entry.text}`
+        : entry.text;
+      const chunks = splitMessage(text, 12000);
+      for (const chunk of chunks) {
+        await sendToRemoteChat(remoteChat.chatId, "slack", chunk, {
+          threadId: remoteChat.threadId,
+        });
+      }
     }
 
     markLatestAssistantDeliveredToSlackThread(remoteChat.chatId, remoteChat.threadId);
   }
 
-  async function notifySlackSessionHandover(): Promise<void> {
+  function getSlackHandoverReasonText(reason?: "user-request" | "active-session"): string {
+    switch (reason) {
+      case "user-request":
+        return "Switched by user request.";
+      case "active-session":
+        return "Bridge moved to the active local session.";
+      default:
+        return "Continuing in another pi session.";
+    }
+  }
+
+  async function notifySlackSessionHandover(reason?: "user-request" | "active-session"): Promise<void> {
     const slackChats = auth.getNotificationChatIds("slack");
     if (slackChats.length === 0) {
       return;
@@ -399,15 +457,10 @@ export default function (pi: ExtensionAPI): void {
 
     const handoverMessage = [
       "🔄 Session changed",
-      `- Working directory: \`${ctx.cwd}\``,
-      `- First prompt: ${getFirstSessionPrompt()}`,
-      `- Context window: ${formatContextUsage()}`,
+      getSlackHandoverReasonText(reason),
     ].join("\n");
 
-    const lastAssistantMessage = getLastAssistantMessageText();
-    const lastAssistantChunks = lastAssistantMessage
-      ? splitMessage(lastAssistantMessage, 12000)
-      : [];
+    const conversation = getConversationHistory();
 
     for (const chatId of slackChats) {
       try {
@@ -415,14 +468,19 @@ export default function (pi: ExtensionAPI): void {
           forceTopLevel: true,
         });
 
-        for (let i = 0; i < lastAssistantChunks.length; i++) {
-          const prefix = i === 0 ? "🧵 Last agent message\n\n" : "";
-          await sendToRemoteChat(chatId, "slack", `${prefix}${lastAssistantChunks[i]}`, {
-            threadId: threadTs,
-          });
+        for (const entry of conversation) {
+          const text = entry.role === "user"
+            ? `🗣️ **User:** ${entry.text}`
+            : entry.text;
+          const chunks = splitMessage(text, 12000);
+          for (const chunk of chunks) {
+            await sendToRemoteChat(chatId, "slack", chunk, {
+              threadId: threadTs,
+            });
+          }
         }
 
-        if (threadTs && lastAssistantChunks.length > 0) {
+        if (threadTs && conversation.length > 0) {
           markLatestAssistantDeliveredToSlackThread(chatId, threadTs);
         }
       } catch (_err) {
@@ -435,6 +493,7 @@ export default function (pi: ExtensionAPI): void {
     respectAutoConnect?: boolean;
     showTakeoverNotice?: boolean;
     notifySlackHandover?: boolean;
+    handoverReason?: "user-request" | "active-session";
   }): Promise<boolean> {
     await transportInitialization;
 
@@ -466,7 +525,7 @@ export default function (pi: ExtensionAPI): void {
       await transportManager.connectAll();
       updateWidget();
       if (tookOver && options?.notifySlackHandover !== false) {
-        await notifySlackSessionHandover();
+        await notifySlackSessionHandover(options?.handoverReason);
       }
       return tookOver;
     } catch (err) {
@@ -520,7 +579,10 @@ export default function (pi: ExtensionAPI): void {
 
   async function startFreshBridgeSession(cwdArg?: string): Promise<string> {
     const cwd = resolvePathInput(cwdArg?.trim() ? cwdArg : ctx.cwd, ctx.cwd);
-    const result = await runTmuxPiConnect({ cwd });
+    const result = await runTmuxPiConnect({
+      cwd,
+      bridgeCommand: "/msg-bridge connect user-request",
+    });
     return buildTmuxConnectSummary(result);
   }
 
@@ -535,6 +597,7 @@ export default function (pi: ExtensionAPI): void {
     const result = await runTmuxPiConnect({
       cwd,
       piArgs: ["--session", selected.path],
+      bridgeCommand: "/msg-bridge connect user-request",
     });
     return buildTmuxConnectSummary(result);
   }
@@ -751,7 +814,7 @@ export default function (pi: ExtensionAPI): void {
     }
 
     if (options?.replayLastAssistantMessage) {
-      await replayLastAssistantMessageToSlackThread(toPendingRemoteChat(message));
+      await replayAllAssistantMessagesToSlackThread(toPendingRemoteChat(message));
     }
 
     if (await handleRemoteCommand(message)) {
@@ -857,7 +920,7 @@ export default function (pi: ExtensionAPI): void {
             const cfg = loadConfig();
             cfg.autoConnect = true;
             saveConfig(cfg);
-            await connectCurrentSession({ showTakeoverNotice: true });
+            await connectCurrentSession({ showTakeoverNotice: true, handoverReason: "user-request" });
             await sendRemoteText(message, "✅ Connected to all configured transports");
           } catch (err) {
             await sendRemoteText(message, `❌ Connection failed: ${(err as Error).message}`);
@@ -1115,8 +1178,17 @@ export default function (pi: ExtensionAPI): void {
       return;
     }
 
+    const sessionFile = getCurrentSessionFile();
+    if (sessionFile) {
+      const config = loadConfig();
+      if (config.optedOutSessions?.includes(sessionFile)) {
+        // This session has opted out of automatic bridge takeover
+        return;
+      }
+    }
+
     try {
-      await connectCurrentSession({ respectAutoConnect: true });
+      await connectCurrentSession({ respectAutoConnect: true, handoverReason: "active-session" });
     } catch (err) {
       ctx.ui.notify(
         `⚠️ msg-bridge could not move to this active session: ${(err as Error).message}`,
@@ -1243,7 +1315,7 @@ export default function (pi: ExtensionAPI): void {
           const cfg = loadConfig();
           cfg.autoConnect = true;
           saveConfig(cfg);
-          await connectCurrentSession({ showTakeoverNotice: true });
+          await connectCurrentSession({ showTakeoverNotice: true, handoverReason: "user-request" });
         },
       });
       return;
@@ -1271,6 +1343,9 @@ export default function (pi: ExtensionAPI): void {
           "/msg-bridge switch <number>   Switch to one of all recent sessions",
           "/msg-bridge sendfile <path>   Upload a local file to current Slack chat",
           "/msg-bridge releaseclaim [transport]  Re-open claiming for a transport",
+          "/msg-bridge optout            Opt this session out of automatic bridge takeover",
+          "/msg-bridge optin             Re-allow this session to take over the bridge",
+          "/msg-bridge optout list        Show sessions opted out of takeover",
           "/msg-bridge toggletools       Toggle tool call visibility",
           "",
           "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
@@ -1280,10 +1355,13 @@ export default function (pi: ExtensionAPI): void {
       }
       case "connect": {
         try {
+          const reasonArg = parts[1] === "user-request" || parts[1] === "active-session"
+            ? parts[1]
+            : "user-request";
           const cfg = loadConfig();
           cfg.autoConnect = true;
           saveConfig(cfg);
-          await connectCurrentSession({ showTakeoverNotice: true });
+          await connectCurrentSession({ showTakeoverNotice: true, handoverReason: reasonArg });
           context.ui.notify("✅ Connected to all configured transports", "info");
           updateWidget();
         } catch (err) {
@@ -1530,6 +1608,70 @@ export default function (pi: ExtensionAPI): void {
           `🔓 Re-opened ${transport} claim${removed > 0 ? ` (removed ${removed} trusted user${removed === 1 ? "" : "s"})` : ""}`,
           "info",
         );
+        break;
+      }
+
+      case "optout":
+      case "opt-out": {
+        const sessionFile = getCurrentSessionFile();
+        if (!sessionFile) {
+          context.ui.notify("❌ No session file available for this session", "error");
+          break;
+        }
+
+        const cfg = loadConfig();
+        const optedOut = cfg.optedOutSessions ?? [];
+        if (optedOut.includes(sessionFile)) {
+          context.ui.notify("ℹ️ This session is already opted out of bridge takeover", "info");
+          break;
+        }
+
+        optedOut.push(sessionFile);
+        cfg.optedOutSessions = optedOut;
+        saveConfig(cfg);
+        context.ui.notify("🛑 This session will NOT take over the Slack bridge when active", "info");
+        break;
+      }
+
+      case "optin":
+      case "opt-in": {
+        const sessionFile = getCurrentSessionFile();
+        if (!sessionFile) {
+          context.ui.notify("❌ No session file available for this session", "error");
+          break;
+        }
+
+        const cfg = loadConfig();
+        const optedOut = cfg.optedOutSessions ?? [];
+        const idx = optedOut.indexOf(sessionFile);
+        if (idx === -1) {
+          context.ui.notify("ℹ️ This session was not opted out — nothing to do", "info");
+          break;
+        }
+
+        optedOut.splice(idx, 1);
+        cfg.optedOutSessions = optedOut.length > 0 ? optedOut : undefined;
+        saveConfig(cfg);
+        context.ui.notify("✅ This session can now take over the Slack bridge again", "info");
+        break;
+      }
+
+      case "optout-list":
+      case "optout list":
+      case "opt-out-list":
+      case "opt-out list": {
+        const cfg = loadConfig();
+        const optedOut = cfg.optedOutSessions ?? [];
+        if (optedOut.length === 0) {
+          context.ui.notify("📋 No sessions are currently opted out of bridge takeover", "info");
+          break;
+        }
+
+        const lines = ["📋 Opted-out sessions", ""];
+        for (const s of optedOut) {
+          lines.push(`  • ${s}`);
+        }
+        context.ui.notify(lines.join("\n"), "info");
         break;
       }
 
