@@ -38,6 +38,12 @@ export default function (pi: ExtensionAPI): void {
   let transportInitialization: Promise<void> = Promise.resolve();
   const slackSessionThreads = new Map<string, string>();
   let activeSlackReaction: { chatId: string; messageId: string } | null = null;
+  let turnAccumulator: {
+    chatId: string;
+    transport: string;
+    entries: string[];
+    threadId?: string;
+  } | null = null;
   const handoffDir = path.join(os.homedir(), ".pi", "msg-bridge-handoffs");
 
   function getCurrentSessionFile(): string | undefined {
@@ -388,6 +394,7 @@ export default function (pi: ExtensionAPI): void {
       threadId?: string;
       forceTopLevel?: boolean;
       rememberThreadForSessionPath?: string;
+      noFooter?: boolean;
     },
   ): Promise<string | undefined> {
     if (transport === "slack") {
@@ -396,7 +403,7 @@ export default function (pi: ExtensionAPI): void {
         const threadTs = options?.forceTopLevel
           ? undefined
           : (options?.threadId || getRememberedSlackThreadForCurrentSession(chatId));
-        const footerText = await buildSlackFooterText();
+        const footerText = options?.noFooter ? undefined : await buildSlackFooterText();
         const rootThreadTs = await slackTransport.sendMessageInThread(chatId, text, threadTs, footerText);
         if (rootThreadTs) {
           rememberSlackThreadForSession(chatId, rootThreadTs, options?.rememberThreadForSessionPath);
@@ -1160,6 +1167,7 @@ export default function (pi: ExtensionAPI): void {
         await clearSlackWorkingReaction();
         await transportManager.disconnectAll();
         pendingRemoteChat = null;
+        turnAccumulator = null;
         releaseLock();
         updateWidget();
         ctx.ui.notify("🔄 msg-bridge connection moved to another session", "info");
@@ -1215,7 +1223,7 @@ export default function (pi: ExtensionAPI): void {
   });
 
   /**
-   * Handle turn end - send response back to messenger
+   * Handle turn end - accumulate response into buffer, don't send to messenger yet
    */
   pi.on("turn_end", async (event, _context) => {
     if (!pendingRemoteChat || !ownsBridgeConnection()) {
@@ -1229,7 +1237,6 @@ export default function (pi: ExtensionAPI): void {
       const message = event.message as AssistantMessage;
       const responseText = extractTextFromMessage(message);
       const toolCallsText = formatToolCalls(message);
-      const hasPendingTools = hasToolCalls(message);
       const config = loadConfig();
 
       const parts: string[] = [];
@@ -1238,47 +1245,80 @@ export default function (pi: ExtensionAPI): void {
       if (toolCallsText && !config.hideToolCalls) parts.push(toolCallsText);
 
       if (parts.length === 0) {
-        // Nothing to send this turn — don't touch pendingRemoteChat;
-        // a future turn_end may have the actual response text.
+        // Nothing from this turn — keep pendingRemoteChat alive for future turns
         return;
       }
 
-      const fullText = parts.join("\n\n");
+      // Initialize accumulator on first turn
+      if (!turnAccumulator) {
+        turnAccumulator = {
+          chatId: pendingRemoteChat.chatId,
+          transport: pendingRemoteChat.transport,
+          entries: [],
+          threadId: pendingRemoteChat.threadId,
+        };
+      }
 
-      // Split long messages — use transport-appropriate limits
-      const maxChunkLen = pendingRemoteChat.transport === "slack" ? 12000 : 4000;
-      const chunks = splitMessage(fullText, maxChunkLen);
-      let lastSlackThreadId = pendingRemoteChat.threadId;
-      for (const chunk of chunks) {
-        const resolvedThreadId = await sendToRemoteChat(
-          pendingRemoteChat.chatId,
-          pendingRemoteChat.transport,
-          chunk,
-          {
-            threadId: pendingRemoteChat.threadId,
-          },
-        );
-        if (pendingRemoteChat.transport === "slack" && resolvedThreadId) {
-          lastSlackThreadId = resolvedThreadId;
+      // Append this turn's combined text as a separate entry
+      turnAccumulator.entries.push(parts.join("\n\n"));
+
+      // Don't send anything to Slack yet. Keep pendingRemoteChat alive.
+      // Reaction stays active — the user knows we're still working.
+    } catch (err) {
+      ctx.ui.notify(
+        `Failed to accumulate turn response: ${(err as Error).message}`,
+        "error"
+      );
+    }
+  });
+
+  /**
+   * Handle agent end - flush all accumulated turn messages to messenger
+   */
+  pi.on("agent_end", async (_event, _context) => {
+    if (!turnAccumulator || !ownsBridgeConnection()) {
+      turnAccumulator = null;
+      return;
+    }
+
+    try {
+      // Send each accumulated turn as its own separate Slack message.
+      // Only the last entry in the batch gets the footer line.
+      const totalEntries = turnAccumulator.entries.length;
+      let lastSlackThreadId = turnAccumulator.threadId;
+      for (let ei = 0; ei < totalEntries; ei++) {
+        const isLast = ei === totalEntries - 1;
+        const entry = turnAccumulator.entries[ei];
+        const maxChunkLen = turnAccumulator.transport === "slack" ? 12000 : 4000;
+        const chunks = splitMessage(entry, maxChunkLen);
+        for (const chunk of chunks) {
+          const resolvedThreadId = await sendToRemoteChat(
+            turnAccumulator.chatId,
+            turnAccumulator.transport,
+            chunk,
+            {
+              threadId: turnAccumulator.threadId,
+              noFooter: !isLast,
+            },
+          );
+          if (turnAccumulator.transport === "slack" && resolvedThreadId) {
+            lastSlackThreadId = resolvedThreadId;
+          }
         }
       }
 
-      if (pendingRemoteChat.transport === "slack" && lastSlackThreadId) {
-        markLatestAssistantDeliveredToSlackThread(pendingRemoteChat.chatId, lastSlackThreadId);
-      }
-
-      if (!hasPendingTools) {
-        await clearSlackWorkingReaction();
-        pendingRemoteChat = null;
+      if (turnAccumulator.transport === "slack" && lastSlackThreadId) {
+        markLatestAssistantDeliveredToSlackThread(turnAccumulator.chatId, lastSlackThreadId);
       }
     } catch (err) {
-      const transport = pendingRemoteChat?.transport ?? "unknown";
-      await clearSlackWorkingReaction();
       ctx.ui.notify(
-        `Failed to send response to ${transport}: ${(err as Error).message}`,
+        `Failed to send accumulated response: ${(err as Error).message}`,
         "error"
       );
+    } finally {
+      await clearSlackWorkingReaction();
       pendingRemoteChat = null;
+      turnAccumulator = null;
     }
   });
 
@@ -1291,6 +1331,7 @@ export default function (pi: ExtensionAPI): void {
       ownershipTimer = undefined;
     }
     await clearSlackWorkingReaction();
+    turnAccumulator = null;
     await transportManager.disconnectAll();
     releaseLock();
   });
