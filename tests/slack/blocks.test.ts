@@ -3,7 +3,7 @@ import {
   markdownToBlocks,
   MAX_SLACK_MARKDOWN_CHARS_PER_MESSAGE,
   splitMarkdownIntoMessages,
-} from '../src/slack-blocks';
+} from '../../src/slack/blocks';
 
 describe('splitMarkdownIntoMessages', () => {
   it('returns a single chunk for short markdown', () => {

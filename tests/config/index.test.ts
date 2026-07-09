@@ -8,12 +8,9 @@ describe('config', () => {
   const originalEnv = { ...process.env };
 
   beforeEach(() => {
-    tmpDir = mkdtempSync(join(tmpdir(), 'msg-bridge-config-'));
-    delete process.env.PI_TELEGRAM_TOKEN;
-    delete process.env.PI_WHATSAPP_AUTH_PATH;
+    tmpDir = mkdtempSync(join(tmpdir(), 'slack-bridge-config-'));
     delete process.env.PI_SLACK_BOT_TOKEN;
     delete process.env.PI_SLACK_APP_TOKEN;
-    delete process.env.PI_DISCORD_TOKEN;
     vi.resetModules();
   });
 
@@ -27,7 +24,7 @@ describe('config', () => {
       const actual = await vi.importActual<typeof import('os')>('os');
       return { ...actual, homedir: () => tmpDir };
     });
-    return await import('../src/config');
+    return await import('../../src/config/index');
   }
 
   it('returns empty config when no file exists', async () => {
@@ -38,10 +35,11 @@ describe('config', () => {
   it('saves and loads config roundtrip', async () => {
     const { loadConfig, saveConfig } = await importConfig();
 
-    saveConfig({ telegram: { token: 'test-token' }, autoConnect: true, debug: false });
+    saveConfig({ slack: { botToken: 'xoxb-test', appToken: 'xapp-test' }, autoConnect: true, debug: false });
     const loaded = loadConfig();
 
-    expect(loaded.telegram?.token).toBe('test-token');
+    expect(loaded.slack?.botToken).toBe('xoxb-test');
+    expect(loaded.slack?.appToken).toBe('xapp-test');
     expect(loaded.autoConnect).toBe(true);
     expect(loaded.debug).toBe(false);
   });
@@ -62,33 +60,29 @@ describe('config', () => {
     expect(stats.mode & 0o777).toBe(0o600);
   });
 
-  it('env vars override file values for the same transport', async () => {
+  it('env vars override file values', async () => {
     const { loadConfig, saveConfig } = await importConfig();
 
-    saveConfig({ telegram: { token: 'file-token' }, autoConnect: true });
-    process.env.PI_TELEGRAM_TOKEN = 'env-token';
+    saveConfig({ slack: { botToken: 'xoxb-file', appToken: 'xapp-file' }, autoConnect: true });
+    process.env.PI_SLACK_BOT_TOKEN = 'xoxb-env';
+    process.env.PI_SLACK_APP_TOKEN = 'xapp-env';
 
     const loaded = loadConfig();
-    expect(loaded.telegram?.token).toBe('env-token');
+    expect(loaded.slack?.botToken).toBe('xoxb-env');
+    expect(loaded.slack?.appToken).toBe('xapp-env');
     // Non-overridden fields survive
     expect(loaded.autoConnect).toBe(true);
   });
 
-  it('loads all transport env vars', async () => {
-    process.env.PI_TELEGRAM_TOKEN = 'tg-token';
-    process.env.PI_WHATSAPP_AUTH_PATH = '/wa/auth';
+  it('loads Slack env vars', async () => {
     process.env.PI_SLACK_BOT_TOKEN = 'xoxb-test';
     process.env.PI_SLACK_APP_TOKEN = 'xapp-test';
-    process.env.PI_DISCORD_TOKEN = 'dc-token';
 
     const { loadConfig } = await importConfig();
     const config = loadConfig();
 
-    expect(config.telegram?.token).toBe('tg-token');
-    expect(config.whatsapp?.authPath).toBe('/wa/auth');
     expect(config.slack?.botToken).toBe('xoxb-test');
     expect(config.slack?.appToken).toBe('xapp-test');
-    expect(config.discord?.token).toBe('dc-token');
   });
 
   it('handles corrupted config file gracefully', async () => {
@@ -107,11 +101,13 @@ describe('config', () => {
     mkdirSync(piDir, { recursive: true });
     writeFileSync(join(piDir, 'msg-bridge.json'), 'not json');
 
-    process.env.PI_TELEGRAM_TOKEN = 'env-token';
+    process.env.PI_SLACK_BOT_TOKEN = 'xoxb-env';
+    process.env.PI_SLACK_APP_TOKEN = 'xapp-env';
 
     const { loadConfig } = await importConfig();
     const config = loadConfig();
-    expect(config.telegram?.token).toBe('env-token');
+    expect(config.slack?.botToken).toBe('xoxb-env');
+    expect(config.slack?.appToken).toBe('xapp-env');
   });
 
   it('requires both Slack tokens for slack config', async () => {

@@ -7,29 +7,24 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { Type } from "typebox";
-import { ChallengeAuth } from "./auth/challenge-auth.js";
-import { loadConfig, saveConfig } from "./config.js";
-import { extractTextFromMessage, formatToolCalls, hasToolCalls, splitMessage, truncate } from "./formatting.js";
-import { acquireLock, forceAcquireLock, getInstanceId, isCurrentLockOwner, isLockHeldLocally, releaseLock } from "./lock.js";
-import { buildTmuxConnectSummary, resolvePathInput, runTmuxPiConnect } from "./tmux-connect.js";
-import { DiscordProvider } from "./transports/discord.js";
-import { TransportManager } from "./transports/manager.js";
-import { MatrixProvider } from "./transports/matrix.js";
-import { SlackProvider } from "./transports/slack.js";
-import { TelegramProvider } from "./transports/telegram.js";
-import { WhatsAppProvider } from "./transports/whatsapp.js";
-import type { ExternalMessage, PendingRemoteChat, TransportStatus } from "./types.js";
-import { openMainMenu } from "./ui/main-menu.js";
-import { createStatusWidget } from "./ui/status-widget.js";
+import { ChallengeAuth } from "../auth/challenge.js";
+import { loadConfig, saveConfig } from "../config/index.js";
+import { extractTextFromMessage, formatToolCalls, hasToolCalls, splitMessage, truncate } from "../slack/formatting.js";
+import { acquireLock, forceAcquireLock, getInstanceId, isCurrentLockOwner, isLockHeldLocally, releaseLock } from "../session/lock.js";
+import { buildTmuxConnectSummary, resolvePathInput, runTmuxPiConnect } from "../session/tmux.js";
+import { SlackClient } from "../slack/client.js";
+import type { ExternalMessage, PendingRemoteChat } from "../types/index.js";
+import { openMainMenu } from "../ui/main-menu.js";
+import { createStatusWidget } from "../ui/status-widget.js";
 
 /**
- * pi-remote-pilot extension
- * Bridges messenger apps (Telegram, WhatsApp, Slack, Discord) into pi
+ * pi-slack-bridge extension
+ * Bridges Slack into pi
  */
 const execFileAsync = promisify(execFile);
 
 export default function (pi: ExtensionAPI): void {
-  const transportManager = new TransportManager();
+  let slackClient: SlackClient | null = null;
   let pendingRemoteChat: PendingRemoteChat | null = null;
   let auth: ChallengeAuth;
   let ctx: ExtensionContext;
@@ -146,8 +141,8 @@ export default function (pi: ExtensionAPI): void {
     return isLockHeldLocally() && isCurrentLockOwner();
   }
 
-  function hasConfiguredTransports(): boolean {
-    return transportManager.getAllTransports().length > 0;
+  function hasConfiguredSlack(): boolean {
+    return slackClient !== null;
   }
 
   function toPendingRemoteChat(message: ExternalMessage): PendingRemoteChat {
@@ -161,9 +156,8 @@ export default function (pi: ExtensionAPI): void {
     };
   }
 
-  function allConfiguredTransportsConnected(): boolean {
-    const status = transportManager.getStatus();
-    return status.length > 0 && status.every((s) => s.connected);
+  function slackIsConnected(): boolean {
+    return slackClient?.isConnected ?? false;
   }
 
   function getFirstSessionPrompt(): string {
@@ -323,9 +317,11 @@ export default function (pi: ExtensionAPI): void {
       rememberSlackThreadForSession(remoteChat.chatId, threadId);
     }
 
-    await transportManager.sendFile(
+    if (!slackClient) {
+      throw new Error("Slack client not available");
+    }
+    await slackClient.sendFile(
       remoteChat.chatId,
-      "slack",
       filePath,
       {
         title: options?.title,
@@ -337,9 +333,8 @@ export default function (pi: ExtensionAPI): void {
     return filePath;
   }
 
-  function getSlackTransport(): SlackProvider | null {
-    const transport = transportManager.getTransport("slack");
-    return transport instanceof SlackProvider ? transport : null;
+  function getSlackClient(): SlackClient | null {
+    return slackClient;
   }
 
   async function clearSlackWorkingReaction(): Promise<void> {
@@ -347,11 +342,11 @@ export default function (pi: ExtensionAPI): void {
 
     const reactionTarget = activeSlackReaction;
     activeSlackReaction = null;
-    const slackTransport = getSlackTransport();
-    if (!slackTransport) return;
+    const slack = getSlackClient();
+    if (!slack) return;
 
     try {
-      await slackTransport.removeReaction(reactionTarget.chatId, reactionTarget.messageId, "hourglass_flowing_sand");
+      await slack.removeReaction(reactionTarget.chatId, reactionTarget.messageId, "hourglass_flowing_sand");
     } catch {
       // Ignore cleanup failures
     }
@@ -372,11 +367,11 @@ export default function (pi: ExtensionAPI): void {
     }
 
     await clearSlackWorkingReaction();
-    const slackTransport = getSlackTransport();
-    if (!slackTransport) return;
+    const slack = getSlackClient();
+    if (!slack) return;
 
     try {
-      await slackTransport.addReaction(remoteChat.chatId, remoteChat.messageId, "hourglass_flowing_sand");
+      await slack.addReaction(remoteChat.chatId, remoteChat.messageId, "hourglass_flowing_sand");
       activeSlackReaction = {
         chatId: remoteChat.chatId,
         messageId: remoteChat.messageId,
@@ -398,13 +393,13 @@ export default function (pi: ExtensionAPI): void {
     },
   ): Promise<string | undefined> {
     if (transport === "slack") {
-      const slackTransport = getSlackTransport();
-      if (slackTransport) {
+      const slack = getSlackClient();
+      if (slack) {
         const threadTs = options?.forceTopLevel
           ? undefined
           : (options?.threadId || getRememberedSlackThreadForCurrentSession(chatId));
         const footerText = options?.noFooter ? undefined : await buildSlackFooterText();
-        const rootThreadTs = await slackTransport.sendMessageInThread(chatId, text, threadTs, footerText);
+        const rootThreadTs = await slack.sendMessageInThread(chatId, text, threadTs, footerText);
         if (rootThreadTs) {
           rememberSlackThreadForSession(chatId, rootThreadTs, options?.rememberThreadForSessionPath);
         }
@@ -412,8 +407,7 @@ export default function (pi: ExtensionAPI): void {
       }
     }
 
-    await transportManager.sendMessage(chatId, transport, text);
-    return undefined;
+    throw new Error(`Unsupported transport: ${transport}`);
   }
 
   async function replayAllAssistantMessagesToSlackThread(remoteChat: PendingRemoteChat): Promise<void> {
@@ -508,7 +502,7 @@ export default function (pi: ExtensionAPI): void {
     if ((options?.respectAutoConnect ?? false) && config.autoConnect === false) {
       return false;
     }
-    if (!hasConfiguredTransports()) {
+    if (!hasConfiguredSlack()) {
       return false;
     }
 
@@ -520,7 +514,7 @@ export default function (pi: ExtensionAPI): void {
       ctx.ui.notify("🔄 Taking over msg-bridge connection from another session...", "info");
     }
 
-    if (alreadyOwner && allConfiguredTransportsConnected()) {
+    if (alreadyOwner && slackIsConnected()) {
       return false;
     }
 
@@ -529,7 +523,9 @@ export default function (pi: ExtensionAPI): void {
     }
 
     try {
-      await transportManager.connectAll();
+      if (slackClient) {
+        await slackClient.connect();
+      }
       updateWidget();
       if (tookOver && options?.notifySlackHandover !== false) {
         await notifySlackSessionHandover(options?.handoverReason);
@@ -576,7 +572,9 @@ export default function (pi: ExtensionAPI): void {
   });
 
   async function disconnectCurrentSession(): Promise<void> {
-    await transportManager.disconnectAll();
+    if (slackClient) {
+      await slackClient.disconnect();
+    }
     releaseLock();
     const cfg = loadConfig();
     cfg.autoConnect = false;
@@ -642,12 +640,12 @@ export default function (pi: ExtensionAPI): void {
 
   function buildBridgeStatusText(): string {
     const stats = auth.getStats();
-    const status = transportManager.getStatus();
+    const connected = slackClient?.isConnected ?? false;
     const lines = [
-      "━━━ Message Bridge Status ━━━",
+      "━━━ Slack Bridge Status ━━━",
       "",
-      "Transports:",
-      ...status.map((s) => `  ${s.connected ? "●" : "○"} ${s.type}`),
+      "Transport:",
+      `  ${connected ? "●" : "○"} slack`,
       "",
       `Trusted Users: ${stats.trustedUsers}`,
     ];
@@ -1005,14 +1003,12 @@ export default function (pi: ExtensionAPI): void {
     }
 
     const stats = auth.getStats();
-    const transports: TransportStatus[] = transportManager
-      .getStatus()
-      .map((s) => ({
-        type: s.type,
-        connected: s.connected,
-      }));
+    const connected = slackClient?.isConnected ?? false;
 
-    const widget = createStatusWidget(transports, stats.usersByTransport);
+    const widget = createStatusWidget(
+      { connected },
+      stats.usersByTransport
+    );
     if (widget) {
       ctx.ui.setWidget("msg-bridge-status", [widget]);
     } else {
@@ -1057,82 +1053,23 @@ export default function (pi: ExtensionAPI): void {
       auth.loadFromConfig(config.auth);
     }
 
-    // Initialize transports in the background (non-blocking)
+    // Initialize Slack client in the background (non-blocking)
     transportInitialization = (async () => {
-      const transportPromises: Promise<void>[] = [];
-
-      if (config.telegram?.token) {
-        transportPromises.push(
-          Promise.resolve().then(() => {
-            const telegramProvider = new TelegramProvider(config.telegram!.token, auth);
-            transportManager.addTransport(telegramProvider);
-          })
-        );
-      }
-
-      if (config.whatsapp) {
-        const whatsappAuthPath = config.whatsapp.authPath || path.join(
-          os.homedir(),
-          ".pi",
-          "msg-bridge-whatsapp-auth"
-        );
-
-        const credsPath = path.join(whatsappAuthPath, "creds.json");
-        if (fs.existsSync(credsPath)) {
-          transportPromises.push(
-            Promise.resolve().then(() => {
-              const whatsappConfig = { ...config.whatsapp!, debug: config.debug };
-              const whatsappProvider = new WhatsAppProvider(whatsappConfig, auth);
-              transportManager.addTransport(whatsappProvider);
-            })
-          );
-        } else {
-          delete config.whatsapp;
-          saveConfig(config);
-        }
-      }
-
       if (config.slack?.botToken && config.slack?.appToken) {
-        transportPromises.push(
-          Promise.resolve().then(() => {
-            const slackProvider = new SlackProvider(config.slack!, auth);
-            transportManager.addTransport(slackProvider);
-          })
-        );
+        slackClient = new SlackClient(config.slack, auth);
       }
-
-      if (config.discord?.token) {
-        transportPromises.push(
-          Promise.resolve().then(() => {
-            const discordProvider = new DiscordProvider(config.discord!, auth);
-            transportManager.addTransport(discordProvider);
-          })
-        );
-      }
-
-      if (config.matrix?.homeserverUrl && config.matrix?.accessToken) {
-        transportPromises.push(
-          Promise.resolve().then(() => {
-            const matrixProvider = new MatrixProvider(config.matrix!, auth);
-            transportManager.addTransport(matrixProvider);
-          })
-        );
-      }
-
-      await Promise.all(transportPromises);
 
       // Auto-connect if configured
-      const transports = transportManager.getAllTransports();
-      if (transports.length > 0 && config.autoConnect !== false) {
+      if (slackClient && config.autoConnect !== false) {
         if (!acquireLock()) {
           ctx.ui.notify("ℹ️ msg-bridge: another instance is already connected — skipping auto-connect", "info");
         } else {
           try {
-            await transportManager.connectAll();
+            await slackClient.connect();
             updateWidget();
           } catch (err) {
             releaseLock();
-            ctx.ui.notify(`⚠️ Some transports failed to connect: ${(err as Error).message}`, "warning");
+            ctx.ui.notify(`⚠️ Slack connection failed: ${(err as Error).message}`, "warning");
           }
         }
       }
@@ -1141,23 +1078,26 @@ export default function (pi: ExtensionAPI): void {
     });
 
     void transportInitialization.catch(err => {
-      console.error("Transport initialization error:", err);
-      ctx.ui.notify(`❌ Transport initialization failed: ${err.message}`, "error");
+      console.error("Slack initialization error:", err);
+      ctx.ui.notify(`❌ Slack initialization failed: ${err.message}`, "error");
     });
 
-    transportManager.onMessage((msg) => {
-      if (!ownsBridgeConnection()) {
-        return;
-      }
+    // Wire Slack client message handler inside session_start (ctx is available)
+    if (slackClient) {
+      slackClient.onMessage((msg: any) => {
+        if (!ownsBridgeConnection()) {
+          return;
+        }
 
-      void handleIncomingRemoteMessage(msg).catch((err) => {
-        ctx.ui.notify(`❌ Failed to handle remote message: ${(err as Error).message}`, "error");
+        void handleIncomingRemoteMessage(msg).catch((err: Error) => {
+          ctx.ui.notify(`❌ Failed to handle Slack message: ${err.message}`, "error");
+        });
       });
-    });
 
-    transportManager.onError((err, transport) => {
-      ctx.ui.notify(`❌ ${transport} error: ${err.message}`, "error");
-    });
+      slackClient.onError((err: Error) => {
+        ctx.ui.notify(`❌ Slack error: ${err.message}`, "error");
+      });
+    }
 
     ownershipTimer = setInterval(() => {
       if (ownershipCheckInProgress || !isLockHeldLocally() || isCurrentLockOwner()) return;
@@ -1165,7 +1105,9 @@ export default function (pi: ExtensionAPI): void {
 
       void (async () => {
         await clearSlackWorkingReaction();
-        await transportManager.disconnectAll();
+        if (slackClient) {
+          await slackClient.disconnect();
+        }
         pendingRemoteChat = null;
         turnAccumulator = null;
         releaseLock();
@@ -1180,6 +1122,24 @@ export default function (pi: ExtensionAPI): void {
 
     updateWidget();
   });
+
+  // Top-level: wire Slack client message handler (also called from configure)
+  function setupSlackMessageHandler(): void {
+    if (!slackClient) return;
+    slackClient.onMessage((msg: any) => {
+      if (!ownsBridgeConnection()) {
+        return;
+      }
+
+      void handleIncomingRemoteMessage(msg).catch((err: Error) => {
+        ctx.ui.notify(`❌ Failed to handle Slack message: ${err.message}`, "error");
+      });
+    });
+
+    slackClient.onError((err: Error) => {
+      ctx.ui.notify(`❌ Slack error: ${err.message}`, "error");
+    });
+  }
 
   pi.on("input", async (event, _context) => {
     if (event.source !== "interactive" && event.source !== "rpc") {
@@ -1212,10 +1172,7 @@ export default function (pi: ExtensionAPI): void {
     if (pendingRemoteChat && ownsBridgeConnection()) {
       try {
         await setSlackWorkingReaction(pendingRemoteChat);
-        await transportManager.sendTyping(
-          pendingRemoteChat.chatId,
-          pendingRemoteChat.transport
-        );
+        // Slack doesn't support typing indicators for bots
       } catch (_err) {
         // Ignore typing indicator errors
       }
@@ -1332,7 +1289,9 @@ export default function (pi: ExtensionAPI): void {
     }
     await clearSlackWorkingReaction();
     turnAccumulator = null;
-    await transportManager.disconnectAll();
+    if (slackClient) {
+      await slackClient.disconnect();
+    }
     releaseLock();
   });
 
@@ -1349,7 +1308,7 @@ export default function (pi: ExtensionAPI): void {
     if (!subcommand || subcommand === "menu") {
       await openMainMenu({
         ui: context.ui,
-        transportManager,
+        slackClient,
         auth,
         updateWidget,
         connectCurrentSession: async () => {
@@ -1365,19 +1324,15 @@ export default function (pi: ExtensionAPI): void {
     switch (subcommand) {
       case "help": {
         const helpText = [
-          "━━━ Message Bridge Commands ━━━",
+          "━━━ Slack Bridge Commands ━━━",
           "",
           "/msg-bridge                   Open interactive menu",
           "/msg-bridge help              Show this help",
-          "/msg-bridge status            Show connection and user status",
-          "/msg-bridge connect           Connect to all transports",
-          "/msg-bridge disconnect        Disconnect from all transports",
-          "/msg-bridge configure telegram <token>",
-          "                              Configure Telegram bot",
-          "/msg-bridge configure whatsapp",
-          "                              Configure WhatsApp (scan QR)",
-          "/msg-bridge configure matrix <homeserver-url> <access-token>",
-          "                              Configure Matrix (Element X, etc)",
+          "/msg-bridge status            Show Slack connection and user status",
+          "/msg-bridge connect           Connect to Slack",
+          "/msg-bridge disconnect        Disconnect from Slack",
+          "/msg-bridge configure slack <bot-token> <app-token>",
+          "                              Configure Slack bot",
           "/msg-bridge widget            Toggle status widget on/off",
           "/msg-bridge new [cwd]         Start a fresh bridge session for current or specified directory",
           "/msg-bridge list-sessions [number]  Show recent sessions (default 10)",
@@ -1403,7 +1358,7 @@ export default function (pi: ExtensionAPI): void {
           cfg.autoConnect = true;
           saveConfig(cfg);
           await connectCurrentSession({ showTakeoverNotice: true, handoverReason: reasonArg });
-          context.ui.notify("✅ Connected to all configured transports", "info");
+          context.ui.notify("✅ Connected to Slack", "info");
           updateWidget();
         } catch (err) {
           releaseLock();
@@ -1416,12 +1371,14 @@ export default function (pi: ExtensionAPI): void {
       }
 
       case "disconnect": {
-        await transportManager.disconnectAll();
+        if (slackClient) {
+          await slackClient.disconnect();
+        }
         releaseLock();
         const cfg = loadConfig();
         cfg.autoConnect = false;
         saveConfig(cfg);
-        context.ui.notify("🔌 Disconnected from all transports", "info");
+        context.ui.notify("🔌 Disconnected from Slack", "info");
         updateWidget();
         break;
       }
@@ -1430,144 +1387,38 @@ export default function (pi: ExtensionAPI): void {
         const platform = parts[1];
         const token = parts.slice(2).join(" ");
 
-        if (!platform) {
-          context.ui.notify("Usage: /msg-bridge configure <platform> [token/path]", "error");
+        if (!platform || platform.toLowerCase() !== "slack") {
+          context.ui.notify("Usage: /msg-bridge configure slack <bot-token> <app-token>" + "\nOnly Slack is supported in this build.", "error");
+          return;
+        }
+
+        const parts2 = token.split(/\s+/);
+        const botToken = parts2[0];
+        const appToken = parts2[1];
+
+        if (!botToken || !appToken) {
+          context.ui.notify("Usage: /msg-bridge configure slack <bot-token> <app-token>", "error");
           return;
         }
 
         const config = loadConfig();
+        config.slack = { botToken, appToken };
+        saveConfig(config);
 
-        switch (platform.toLowerCase()) {
-          case "telegram": {
-            if (!token) {
-              context.ui.notify("Usage: /msg-bridge configure telegram <bot-token>", "error");
-              return;
-            }
-            config.telegram = { token };
-            saveConfig(config);
-            const telegramProvider = new TelegramProvider(token, auth);
-            transportManager.addTransport(telegramProvider);
-            if (acquireLock()) {
-              try {
-                await telegramProvider.connect();
-                context.ui.notify("✅ Telegram configured and connected", "info");
-              } catch (_err) {
-                releaseLock();
-                context.ui.notify("✅ Telegram configured (run /msg-bridge connect to activate)", "info");
-              }
-            } else {
-              context.ui.notify("✅ Telegram configured (another instance is connected — run /msg-bridge connect later)", "info");
-            }
-            updateWidget();
-            break;
+        slackClient = new SlackClient(config.slack, auth);
+        if (acquireLock()) {
+          try {
+            await slackClient.connect();
+            setupSlackMessageHandler();
+            context.ui.notify("✅ Slack configured and connected", "info");
+          } catch (err) {
+            releaseLock();
+            context.ui.notify(`⚠️ Slack setup error: ${(err as Error).message}`, "error");
           }
-
-          case "whatsapp": {
-            config.whatsapp = token ? { authPath: token } : {};
-            saveConfig(config);
-            const whatsappConfig = { ...config.whatsapp, debug: config.debug };
-            const whatsappProvider = new WhatsAppProvider(whatsappConfig, auth);
-            transportManager.addTransport(whatsappProvider);
-            if (acquireLock()) {
-              try {
-                await whatsappProvider.connect(true);
-                context.ui.notify("✅ WhatsApp configured and connecting (scan QR code in terminal)...", "info");
-              } catch (err) {
-                releaseLock();
-                context.ui.notify(`⚠️ WhatsApp setup error: ${(err as Error).message}`, "error");
-              }
-            } else {
-              context.ui.notify("✅ WhatsApp configured (another instance is connected — run /msg-bridge connect later)", "info");
-            }
-            updateWidget();
-            break;
-          }
-
-          case "slack": {
-            const parts2 = token.split(/\s+/);
-            const botToken = parts2[0];
-            const appToken = parts2[1];
-
-            if (!botToken || !appToken) {
-              context.ui.notify("Usage: /msg-bridge configure slack <bot-token> <app-token>", "error");
-              return;
-            }
-
-            config.slack = { botToken, appToken };
-            saveConfig(config);
-            const slackProvider = new SlackProvider(config.slack, auth);
-            transportManager.addTransport(slackProvider);
-            if (acquireLock()) {
-              try {
-                await slackProvider.connect();
-                context.ui.notify("✅ Slack configured and connected", "info");
-              } catch (err) {
-                releaseLock();
-                context.ui.notify(`⚠️ Slack setup error: ${(err as Error).message}`, "error");
-              }
-            } else {
-              context.ui.notify("✅ Slack configured (another instance is connected — run /msg-bridge connect later)", "info");
-            }
-            updateWidget();
-            break;
-          }
-
-          case "discord": {
-            if (!token) {
-              context.ui.notify("Usage: /msg-bridge configure discord <bot-token>", "error");
-              return;
-            }
-
-            config.discord = { token };
-            saveConfig(config);
-            const discordProvider = new DiscordProvider(config.discord, auth);
-            transportManager.addTransport(discordProvider);
-            if (acquireLock()) {
-              try {
-                await discordProvider.connect();
-                context.ui.notify("✅ Discord configured and connected", "info");
-              } catch (err) {
-                releaseLock();
-                context.ui.notify(`⚠️ Discord setup error: ${(err as Error).message}`, "error");
-              }
-            } else {
-              context.ui.notify("✅ Discord configured (another instance is connected — run /msg-bridge connect later)", "info");
-            }
-            updateWidget();
-            break;
-          }
-
-          case "matrix": {
-            const matrixParts = token.split(/\s+/);
-            const homeserverUrl = matrixParts[0];
-            const matrixAccessToken = matrixParts.slice(1).join(" ");
-            if (!homeserverUrl || !matrixAccessToken) {
-              context.ui.notify("Usage: /msg-bridge configure matrix <homeserver-url> <access-token>", "error");
-              return;
-            }
-
-            config.matrix = { homeserverUrl, accessToken: matrixAccessToken };
-            saveConfig(config);
-            const matrixProvider = new MatrixProvider(config.matrix, auth);
-            transportManager.addTransport(matrixProvider);
-            if (acquireLock()) {
-              try {
-                await matrixProvider.connect();
-                context.ui.notify("✅ Matrix configured and connected", "info");
-              } catch (err) {
-                releaseLock();
-                context.ui.notify(`⚠️ Matrix setup error: ${(err as Error).message}`, "error");
-              }
-            } else {
-              context.ui.notify("✅ Matrix configured (another instance is connected — run /msg-bridge connect later)", "info");
-            }
-            updateWidget();
-            break;
-          }
-
-          default:
-            context.ui.notify(`❌ Unknown platform: ${platform}`, "error");
+        } else {
+          context.ui.notify("✅ Slack configured (another instance is connected — run /msg-bridge connect later)", "info");
         }
+        updateWidget();
         break;
       }
 
@@ -1718,14 +1569,12 @@ export default function (pi: ExtensionAPI): void {
 
       case "status": {
         const stats = auth.getStats();
-        const status = transportManager.getStatus();
+        const connected = slackClient?.isConnected ?? false;
         const lines = [
-          "━━━ Message Bridge Status ━━━",
+          "━━━ Slack Bridge Status ━━━",
           "",
-          "Transports:",
-          ...status.map(
-            (s) => `  ${s.connected ? "●" : "○"} ${s.type}`
-          ),
+          "Transport:",
+          `  ${connected ? "●" : "○"} slack`,
           "",
           `Trusted Users: ${stats.trustedUsers}`,
         ];

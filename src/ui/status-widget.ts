@@ -1,32 +1,20 @@
-import type { TransportStatus } from "../types.js";
-
-const TRANSPORT_ABBREV: Record<string, string> = {
-  telegram: "tg",
-  whatsapp: "wa",
-  slack: "slk",
-  discord: "dc",
-};
-
 /**
- * Status widget showing remote pilot connection status
+ * Status widget showing Slack bridge connection status
  */
+
+export interface SlackStatus {
+  connected: boolean;
+}
+
 export function createStatusWidget(
-  transports: TransportStatus[],
+  slackStatus: SlackStatus,
   usersByTransport: Record<string, string[]>
 ): string | undefined {
-  if (transports.length === 0) {
-    return undefined;
-  }
+  const userCount = usersByTransport.slack?.length || 0;
+  const userSuffix = userCount > 0 ? `:${userCount}` : "";
+  const abbrev = "slk";
 
-  const transportList = transports
-    .filter((t) => t.connected)
-    .map((t) => {
-      const abbrev = TRANSPORT_ABBREV[t.type] || t.type.slice(0, 3);
-      const userCount = usersByTransport[t.type]?.length || 0;
-      const userSuffix = userCount > 0 ? `:${userCount}` : "";
-      return `[${abbrev}${userSuffix}]`;
-    })
-    .join("");
-
-  return `💬 ${transportList}`;
+  return slackStatus.connected
+    ? `💬 [${abbrev}${userSuffix}]`
+    : undefined;
 }

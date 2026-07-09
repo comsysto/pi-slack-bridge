@@ -3,7 +3,7 @@
  * Ported from vscode-chonky-remote-pilot
  */
 
-import { loadConfig, saveConfig } from "../config.js";
+import { loadConfig, saveConfig } from "../config/index.js";
 
 interface ChallengeData {
   code: string;

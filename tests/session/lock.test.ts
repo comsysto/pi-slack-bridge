@@ -27,7 +27,7 @@ describe('lock', () => {
       const actual = await vi.importActual<typeof import('os')>('os');
       return { ...actual, homedir: () => lockDir };
     });
-    return await import('../src/lock');
+    return await import('../../src/session/lock');
   }
 
   it('acquires lock and writes lock file', async () => {

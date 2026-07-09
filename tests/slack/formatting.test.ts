@@ -3,7 +3,7 @@ import {
   formatToolCalls,
   splitMessage,
   truncate,
-} from '../src/formatting';
+} from '../../src/slack/formatting';
 
 describe('truncate', () => {
   it('returns short strings unchanged', () => {

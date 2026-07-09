@@ -1,10 +1,18 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import type { ChallengeAuth } from "../auth/challenge-auth.js";
-import { markdownToBlocks, splitMarkdownIntoMessages } from "../slack-blocks.js";
-import type { ExternalMessage } from "../types.js";
-import type { ITransportProvider, TransportFileOptions } from "./interface.js";
+import type { ChallengeAuth } from "../auth/challenge.js";
+import { markdownToBlocks, splitMarkdownIntoMessages } from "./blocks.js";
+import type { ExternalMessage } from "../types/index.js";
+
+/**
+ * Options for file uploads via the Slack client.
+ */
+export interface TransportFileOptions {
+  title?: string;
+  initialComment?: string;
+  threadId?: string;
+}
 
 // Dynamic import for ESM modules
 type App = any;
@@ -30,7 +38,7 @@ async function loadSlackBolt() {
 /**
  * Slack transport provider using @slack/bolt
  */
-export class SlackProvider implements ITransportProvider {
+export class SlackClient {
   readonly type = "slack";
   private app: App | null = null;
   private _isConnected = false;
