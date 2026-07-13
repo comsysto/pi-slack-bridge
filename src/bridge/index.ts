@@ -32,7 +32,6 @@ import { SlackClient } from "../slack/client.js";
 import {
   extractTextFromMessage,
   formatToolCalls,
-  splitMessage,
 } from "../slack/formatting.js";
 import {
   rememberSlackThreadForSession,
@@ -209,13 +208,9 @@ export default function (pi: ExtensionAPI): void {
   }
 
   async function sendRemoteText(message: ExternalMessage, text: string): Promise<void> {
-    const maxLen = 12000;
-    const chunks = splitMessage(text, maxLen);
-    for (const chunk of chunks) {
-      await sendToRemoteChat(message.chatId, message.transport, chunk, {
-        threadId: message.threadId,
-      });
-    }
+    await sendToRemoteChat(message.chatId, message.transport, text, {
+      threadId: message.threadId,
+    });
   }
 
   async function sendSlackFileToCurrentChat(
@@ -284,12 +279,9 @@ export default function (pi: ExtensionAPI): void {
       const text = entry.role === "user"
         ? `🗣️ **User:** ${entry.text}`
         : entry.text;
-      const chunks = splitMessage(text, 12000);
-      for (const chunk of chunks) {
-        await sendToRemoteChat(remoteChat.chatId, "slack", chunk, {
-          threadId: remoteChat.threadId,
-        });
-      }
+      await sendToRemoteChat(remoteChat.chatId, "slack", text, {
+        threadId: remoteChat.threadId,
+      });
     }
 
     markLatestAssistantDeliveredToSlackThread(
@@ -324,10 +316,7 @@ export default function (pi: ExtensionAPI): void {
             const text = entry.role === "user"
               ? `🗣️ **User:** ${entry.text}`
               : entry.text;
-            const chunks = splitMessage(text, 12000);
-            for (const chunk of chunks) {
-              await sendToRemoteChat(chatId, "slack", chunk, { threadId: threadTs });
-            }
+            await sendToRemoteChat(chatId, "slack", text, { threadId: threadTs });
           }
 
           if (threadTs && conversation.length > 0) {
@@ -973,20 +962,17 @@ export default function (pi: ExtensionAPI): void {
       for (let ei = 0; ei < totalEntries; ei++) {
         const isLast = ei === totalEntries - 1;
         const entry = turnAccumulator.entries[ei];
-        const chunks = splitMessage(entry, 12000);
-        for (const chunk of chunks) {
-          const resolvedThreadId = await sendToRemoteChat(
-            turnAccumulator.chatId,
-            turnAccumulator.transport,
-            chunk,
-            {
-              threadId: turnAccumulator.threadId,
-              noFooter: !isLast,
-            },
-          );
-          if (resolvedThreadId) {
-            lastSlackThreadId = resolvedThreadId;
-          }
+        const resolvedThreadId = await sendToRemoteChat(
+          turnAccumulator.chatId,
+          turnAccumulator.transport,
+          entry,
+          {
+            threadId: turnAccumulator.threadId,
+            noFooter: !isLast,
+          },
+        );
+        if (resolvedThreadId) {
+          lastSlackThreadId = resolvedThreadId;
         }
       }
 
