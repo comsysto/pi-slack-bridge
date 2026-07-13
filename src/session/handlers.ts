@@ -46,6 +46,21 @@ export function getFirstSessionPrompt(sessionManager: BranchProvider): string {
   return text ? truncate(text, 500) : "No text prompt yet";
 }
 
+/** Format token count the same way pi's TUI footer does:
+ *  - < 1000: raw number
+ *  - < 10000: (count / 1000).toFixed(1) + "k"   (e.g. 1024 → "1.0k")
+ *  - < 1000000: Math.round(count / 1000) + "k"   (e.g. 128000 → "128k")
+ *  - < 10000000: (count / 1000000).toFixed(1) + "M" (e.g. 1048576 → "1.0M")
+ *  - >= 10000000: Math.round(count / 1000000) + "M"
+ */
+function formatTokens(count: number): string {
+  if (count < 1000) return count.toString();
+  if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
+  if (count < 1000000) return `${Math.round(count / 1000)}k`;
+  if (count < 10000000) return `${(count / 1000000).toFixed(1)}M`;
+  return `${Math.round(count / 1000000)}M`;
+}
+
 export function formatContextUsage(ctx: SessionContext): string {
   const usage = ctx.getContextUsage();
   const contextWindow = usage?.contextWindow ?? ctx.model?.contextWindow;
@@ -55,8 +70,8 @@ export function formatContextUsage(ctx: SessionContext): string {
   }
 
   const percent = usage.percent === null ? "?" : `${usage.percent.toFixed(1)}%`;
-  const windowK = `${Math.round(contextWindow / 1000)}k`;
-  return `${percent} / ${windowK}`;
+  const windowStr = formatTokens(contextWindow);
+  return `${percent} / ${windowStr}`;
 }
 
 export function formatDisplayPath(cwd: string): string {
