@@ -9,16 +9,16 @@ describe('lock', () => {
 
   beforeEach(() => {
     tmpDir = mkdtempSync(join(tmpdir(), 'slk-bridge-lock-'));
-    delete g.__msgBridgeInstanceId;
-    delete g.__msgBridgeConnected;
-    delete g.__msgBridgeOwner;
+    delete g.__slkBridgeInstanceId;
+    delete g.__slkBridgeConnected;
+    delete g.__slkBridgeOwner;
     vi.resetModules();
   });
 
   afterEach(() => {
-    delete g.__msgBridgeConnected;
-    delete g.__msgBridgeOwner;
-    delete g.__msgBridgeInstanceId;
+    delete g.__slkBridgeConnected;
+    delete g.__slkBridgeOwner;
+    delete g.__slkBridgeInstanceId;
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -33,13 +33,13 @@ describe('lock', () => {
   it('acquires lock and writes lock file', async () => {
     const { acquireLock } = await importLock(tmpDir);
     expect(acquireLock()).toBe(true);
-    expect(g.__msgBridgeConnected).toBe(true);
+    expect(g.__slkBridgeConnected).toBe(true);
 
     const lockPath = join(tmpDir, '.pi', 'slk-bridge.lock');
     const content = readFileSync(lockPath, 'utf-8');
     const [pid, owner] = content.split(':');
     expect(parseInt(pid, 10)).toBe(process.pid);
-    expect(owner).toBe(g.__msgBridgeInstanceId);
+    expect(owner).toBe(g.__slkBridgeInstanceId);
   });
 
   it('allows same instance to re-acquire (idempotent)', async () => {
@@ -53,8 +53,8 @@ describe('lock', () => {
     acquireLock();
 
     releaseLock();
-    expect(g.__msgBridgeConnected).toBe(false);
-    expect(g.__msgBridgeOwner).toBeUndefined();
+    expect(g.__slkBridgeConnected).toBe(false);
+    expect(g.__slkBridgeOwner).toBeUndefined();
     expect(existsSync(join(tmpDir, '.pi', 'slk-bridge.lock'))).toBe(false);
   });
 
@@ -63,10 +63,10 @@ describe('lock', () => {
 
     expect(acquireLock()).toBe(true);
     releaseLock();
-    expect(g.__msgBridgeConnected).toBe(false);
+    expect(g.__slkBridgeConnected).toBe(false);
 
     expect(acquireLock()).toBe(true);
-    expect(g.__msgBridgeConnected).toBe(true);
+    expect(g.__slkBridgeConnected).toBe(true);
     expect(existsSync(join(tmpDir, '.pi', 'slk-bridge.lock'))).toBe(true);
   });
 
@@ -75,7 +75,7 @@ describe('lock', () => {
     acquireLock();
 
     vi.resetModules();
-    delete g.__msgBridgeInstanceId;
+    delete g.__slkBridgeInstanceId;
     const lock2 = await importLock(tmpDir);
 
     expect(lock2.acquireLock()).toBe(false);
@@ -103,12 +103,12 @@ describe('lock', () => {
     const { acquireLock, releaseLock } = await importLock(tmpDir);
     acquireLock();
 
-    const realOwner = g.__msgBridgeOwner;
-    g.__msgBridgeOwner = 'someone-else';
+    const realOwner = g.__slkBridgeOwner;
+    g.__slkBridgeOwner = 'someone-else';
     releaseLock();
 
-    g.__msgBridgeOwner = realOwner;
-    expect(g.__msgBridgeConnected).toBe(true);
+    g.__slkBridgeOwner = realOwner;
+    expect(g.__slkBridgeConnected).toBe(true);
     expect(existsSync(join(tmpDir, '.pi', 'slk-bridge.lock'))).toBe(true);
   });
 
@@ -129,9 +129,9 @@ describe('lock', () => {
     const previousOwner = forceAcquireLock();
 
     expect(previousOwner).toEqual({ pid: process.pid, owner: 'other-instance' });
-    expect(readFileSync(join(piDir, 'slk-bridge.lock'), 'utf-8')).toBe(`${process.pid}:${g.__msgBridgeInstanceId}`);
-    expect(g.__msgBridgeConnected).toBe(true);
-    expect(g.__msgBridgeOwner).toBe(g.__msgBridgeInstanceId);
+    expect(readFileSync(join(piDir, 'slk-bridge.lock'), 'utf-8')).toBe(`${process.pid}:${g.__slkBridgeInstanceId}`);
+    expect(g.__slkBridgeConnected).toBe(true);
+    expect(g.__slkBridgeOwner).toBe(g.__slkBridgeInstanceId);
   });
 
   it('reports whether lock is held locally and currently owned', async () => {
@@ -155,7 +155,7 @@ describe('lock', () => {
       `${process.pid}:someone-else`,
     );
 
-    expect(getInstanceId()).toBe(g.__msgBridgeInstanceId);
+    expect(getInstanceId()).toBe(g.__slkBridgeInstanceId);
     expect(isLockHeldLocally()).toBe(true);
     expect(isCurrentLockOwner()).toBe(false);
   });
