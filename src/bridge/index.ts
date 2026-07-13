@@ -89,7 +89,7 @@ export default function (pi: ExtensionAPI): void {
     entries: string[];
     threadId?: string;
   } | null = null;
-  const handoffDir = path.join(os.homedir(), ".pi", "msg-bridge-handoffs");
+  const handoffDir = path.join(os.homedir(), ".pi", "slk-bridge-handoffs");
 
   // ── Short-lived helpers (bridge state accessors) ──────────────────────────
 
@@ -375,7 +375,7 @@ export default function (pi: ExtensionAPI): void {
     const tookOver = !!previousOwner && (previousOwner.pid !== process.pid || previousOwner.owner !== getInstanceId());
 
     if (options?.showTakeoverNotice && tookOver) {
-      ctx.ui.notify("🔄 Taking over msg-bridge connection from another session...", "info");
+      ctx.ui.notify("🔄 Taking over slk-bridge connection from another session...", "info");
     }
 
     if (alreadyOwner && slackIsConnected()) {
@@ -489,7 +489,7 @@ export default function (pi: ExtensionAPI): void {
       await runTmuxPiConnect({
         cwd: targetSession.cwd || ctx.cwd,
         piArgs: ["--session", targetSessionPath],
-        bridgeCommand: `/msg-bridge accept-handoff ${handoffFile}`,
+        bridgeCommand: `/slk-bridge accept-handoff ${handoffFile}`,
         attachClient: false,
         cleanupOtherSessions: false,
       });
@@ -716,7 +716,7 @@ export default function (pi: ExtensionAPI): void {
     const config = loadConfig();
 
     if (config.showWidget === false) {
-      ctx.ui.setStatus("msg-bridge-status", undefined);
+      ctx.ui.setStatus("slk-bridge-status", undefined);
       return;
     }
 
@@ -725,9 +725,9 @@ export default function (pi: ExtensionAPI): void {
       { slack: [] },
     );
     if (statusText) {
-      ctx.ui.setStatus("msg-bridge-status", statusText);
+      ctx.ui.setStatus("slk-bridge-status", statusText);
     } else {
-      ctx.ui.setStatus("msg-bridge-status", undefined);
+      ctx.ui.setStatus("slk-bridge-status", undefined);
     }
   }
 
@@ -820,7 +820,7 @@ export default function (pi: ExtensionAPI): void {
       // Auto-connect if configured
       if (slackClient && config.autoConnect !== false) {
         if (!acquireLock()) {
-          ctx.ui.notify("ℹ️ msg-bridge: another instance is already connected — skipping auto-connect", "info");
+          ctx.ui.notify("ℹ️ slk-bridge: another instance is already connected — skipping auto-connect", "info");
         } else {
           try {
             await slackClient.connect();
@@ -868,10 +868,10 @@ export default function (pi: ExtensionAPI): void {
         turnAccumulator = null;
         releaseLock();
         updateWidget();
-        ctx.ui.notify("🔄 msg-bridge connection moved to another session", "info");
+        ctx.ui.notify("🔄 slk-bridge connection moved to another session", "info");
       })()
         .catch((err) => {
-          ctx.ui.notify(`❌ Failed to release msg-bridge connection after ownership loss: ${(err as Error).message}`, "error");
+          ctx.ui.notify(`❌ Failed to release slk-bridge connection after ownership loss: ${(err as Error).message}`, "error");
         })
         .finally(() => {
           ownershipCheckInProgress = false;
@@ -898,7 +898,7 @@ export default function (pi: ExtensionAPI): void {
       await connectCurrentSession({ respectAutoConnect: true, handoverReason: "active-session" });
     } catch (err) {
       ctx.ui.notify(
-        `⚠️ msg-bridge could not move to this active session: ${(err as Error).message}`,
+        `⚠️ slk-bridge could not move to this active session: ${(err as Error).message}`,
         "warning",
       );
     }
@@ -1118,7 +1118,7 @@ export default function (pi: ExtensionAPI): void {
             }
           } else {
             context.ui.notify(
-              "✅ Slack configured (another instance is connected — run /msg-bridge connect later)",
+              "✅ Slack configured (another instance is connected — run /slk-bridge connect later)",
               "info",
             );
           }
@@ -1152,7 +1152,7 @@ export default function (pi: ExtensionAPI): void {
           const limitArg = parts[1];
           const limit = limitArg ? parseInt(limitArg, 10) : 10;
           if (!Number.isFinite(limit) || limit < 1) {
-            context.ui.notify("Usage: /msg-bridge list-sessions [number]", "error");
+            context.ui.notify("Usage: /slk-bridge list-sessions [number]", "error");
             break;
           }
           try {
@@ -1166,7 +1166,7 @@ export default function (pi: ExtensionAPI): void {
         case "switch": {
           const index = parseInt(parts[1] || "", 10);
           if (!Number.isFinite(index) || index < 1) {
-            context.ui.notify("Usage: /msg-bridge switch <number>", "error");
+            context.ui.notify("Usage: /slk-bridge switch <number>", "error");
             break;
           }
           try {
@@ -1181,7 +1181,7 @@ export default function (pi: ExtensionAPI): void {
         case "sendfile": {
           const fileArg = parts.slice(1).join(" ").trim();
           if (!fileArg) {
-            context.ui.notify("Usage: /msg-bridge sendfile <path>", "error");
+            context.ui.notify("Usage: /slk-bridge sendfile <path>", "error");
             break;
           }
           try {
@@ -1273,7 +1273,7 @@ export default function (pi: ExtensionAPI): void {
         case "accept-handoff": {
           const handoffFile = parts.slice(1).join(" ").trim();
           if (!handoffFile) {
-            context.ui.notify("Usage: /msg-bridge accept-handoff <file>", "error");
+            context.ui.notify("Usage: /slk-bridge accept-handoff <file>", "error");
             break;
           }
 
@@ -1297,7 +1297,7 @@ export default function (pi: ExtensionAPI): void {
               replayLastAssistantMessage: payload.replayLastAssistantMessage === true,
             });
           } catch (err) {
-            context.ui.notify(`❌ Failed to accept msg-bridge handoff: ${(err as Error).message}`, "error");
+            context.ui.notify(`❌ Failed to accept slk-bridge handoff: ${(err as Error).message}`, "error");
           } finally {
             try {
               fs.unlinkSync(handoffFile);
@@ -1309,7 +1309,7 @@ export default function (pi: ExtensionAPI): void {
         }
 
         default:
-          context.ui.notify(`Unknown subcommand: ${subcommand}. Run /msg-bridge help`, "warning");
+          context.ui.notify(`Unknown subcommand: ${subcommand}. Run /slk-bridge help`, "warning");
           break;
       }
     },

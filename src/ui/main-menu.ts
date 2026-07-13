@@ -1,5 +1,5 @@
 /**
- * main-menu.ts — Interactive main menu for /msg-bridge.
+ * main-menu.ts — Interactive main menu for /slk-bridge.
  *
  * Shows Slack connection status, with Connect, Configure, Widget, and Help.
  */
