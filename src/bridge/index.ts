@@ -316,37 +316,40 @@ export default function (pi: ExtensionAPI): void {
       getSlackHandoverReasonText(reason),
     ].join("\n");
 
+    // Fire the full conversation replay as a background task so connectCurrentSession
+    // returns quickly — pi can process the user's input without waiting for 50 Slack API calls.
     const conversation = getConversationHistory(ctx.sessionManager);
+    void (async () => {
+      for (const chatId of slackChats) {
+        try {
+          const threadTs = await sendToRemoteChat(chatId, "slack", handoverMessage, {
+            forceTopLevel: true,
+          });
 
-    for (const chatId of slackChats) {
-      try {
-        const threadTs = await sendToRemoteChat(chatId, "slack", handoverMessage, {
-          forceTopLevel: true,
-        });
-
-        for (const entry of conversation) {
-          const text = entry.role === "user"
-            ? `🗣️ **User:** ${entry.text}`
-            : entry.text;
-          const chunks = splitMessage(text, 12000);
-          for (const chunk of chunks) {
-            await sendToRemoteChat(chatId, "slack", chunk, { threadId: threadTs });
+          for (const entry of conversation) {
+            const text = entry.role === "user"
+              ? `🗣️ **User:** ${entry.text}`
+              : entry.text;
+            const chunks = splitMessage(text, 12000);
+            for (const chunk of chunks) {
+              await sendToRemoteChat(chatId, "slack", chunk, { threadId: threadTs });
+            }
           }
-        }
 
-        if (threadTs && conversation.length > 0) {
-          markLatestAssistantDeliveredToSlackThread(
-            chatId,
-            threadTs,
-            undefined,
-            getCurrentSessionFile,
-            () => getLastAssistantMessageInfo(ctx.sessionManager),
-          );
+          if (threadTs && conversation.length > 0) {
+            markLatestAssistantDeliveredToSlackThread(
+              chatId,
+              threadTs,
+              undefined,
+              getCurrentSessionFile,
+              () => getLastAssistantMessageInfo(ctx.sessionManager),
+            );
+          }
+        } catch {
+          // Ignore notification failures
         }
-      } catch {
-        // Ignore notification failures
       }
-    }
+    })();
   }
 
   // ── Connect / disconnect ─────────────────────────────────────────────────
