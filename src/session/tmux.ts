@@ -46,7 +46,7 @@ export function buildTmuxConnectSummary(result: TmuxConnectResult): string {
 }
 
 export async function runTmuxPiConnect(options: TmuxConnectOptions): Promise<TmuxConnectResult> {
-  const bridgeCommand = options.bridgeCommand || "/msg-bridge connect";
+  const bridgeCommand = options.bridgeCommand || "/slk-bridge connect";
   const startupWaitMs = options.startupWaitMs ?? 2000;
   const postSendWaitMs = options.postSendWaitMs ?? 2000;
   const cleanupDelayMs = options.cleanupDelayMs ?? 3000;

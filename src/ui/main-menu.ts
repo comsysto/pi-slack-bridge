@@ -23,6 +23,7 @@ export interface MenuContext {
   auth: ChallengeAuth;
   updateWidget: () => void;
   connectCurrentSession: () => Promise<void>;
+  getCurrentSessionFile?: () => string | undefined;
 }
 
 // ── Status ──────────────────────────────────────────────────────────────────
@@ -31,26 +32,27 @@ function getStatusLine(mctx: MenuContext): string {
   const connected = mctx.slackClient?.isConnected ?? false;
   const stats = mctx.auth.getStats();
 
-  const slackLine = connected
-    ? "  ● Slack"
-    : "  ○ Slack";
+  const statusLine = connected
+    ? "  ● Connected"
+    : "  ○ Disconnected";
 
-  return `${slackLine}\n  Trusted users: ${stats.trustedUsers}`;
+  return `${statusLine}\n  Trusted users: ${stats.trustedUsers}`;
 }
 
 // ── Help ────────────────────────────────────────────────────────────────────
 
+// FYI: resolved — renamed to /slk-bridge, configure no longer needs 'slack' argument
 function showHelp(mctx: MenuContext): void {
   mctx.ui.notify(
     "Subcommands:\n" +
-    "  /msg-bridge status                — show Slack connection status\n" +
-    "  /msg-bridge connect               — connect Slack\n" +
-    "  /msg-bridge disconnect            — disconnect Slack\n" +
-    "  /msg-bridge configure slack       — set up Slack bot token + app token\n" +
-    "  /msg-bridge widget                — toggle status widget\n" +
-    "  /msg-bridge list-sessions         — show up to 10 recent sessions\n" +
-    "  /msg-bridge switch <number>       — switch to a listed session\n" +
-    "  /msg-bridge sendfile <path>       — upload local file to current Slack chat",
+    "  /slk-bridge status                — show Slack connection status\n" +
+    "  /slk-bridge connect               — connect Slack\n" +
+    "  /slk-bridge disconnect            — disconnect Slack\n" +
+    "  /slk-bridge configure             — set up Slack bot token + app token\n" +
+    "  /slk-bridge widget                — toggle status widget\n" +
+    "  /slk-bridge list-sessions         — show up to 10 recent sessions\n" +
+    "  /slk-bridge switch <number>       — switch to a listed session\n" +
+    "  /slk-bridge sendfile <path>       — upload local file to current Slack chat",
     "info",
   );
 }
@@ -103,7 +105,7 @@ async function doConfigure(mctx: MenuContext): Promise<void> {
       mctx.ui.notify(`⚠️ Slack setup error: ${(err as Error).message}`, "error");
     }
   } else {
-    mctx.ui.notify("✅ Slack configured (another instance is connected — run /msg-bridge connect later)", "info");
+    mctx.ui.notify("✅ Slack configured (another instance is connected — run /slk-bridge connect later)", "info");
   }
 
   mctx.updateWidget();
@@ -116,6 +118,43 @@ function doToggleWidget(mctx: MenuContext): void {
   const state = cfg.showWidget !== false ? "shown" : "hidden";
   mctx.ui.notify(`📊 Status widget ${state}`, "info");
   mctx.updateWidget();
+}
+
+function doOptOut(mctx: MenuContext): void {
+  const sessionFile = mctx.getCurrentSessionFile?.();
+  if (!sessionFile) {
+    mctx.ui.notify("❌ No session file available for this session", "error");
+    return;
+  }
+  const cfg = loadConfig();
+  const optedOut = cfg.optedOutSessions ?? [];
+  if (optedOut.includes(sessionFile)) {
+    mctx.ui.notify("ℹ️ This session is already opted out of bridge takeover", "info");
+    return;
+  }
+  optedOut.push(sessionFile);
+  cfg.optedOutSessions = optedOut;
+  saveConfig(cfg);
+  mctx.ui.notify("🛑 This session will NOT take over the Slack bridge when active", "info");
+}
+
+function doOptIn(mctx: MenuContext): void {
+  const sessionFile = mctx.getCurrentSessionFile?.();
+  if (!sessionFile) {
+    mctx.ui.notify("❌ No session file available for this session", "error");
+    return;
+  }
+  const cfg = loadConfig();
+  const optedOut = cfg.optedOutSessions ?? [];
+  const idx = optedOut.indexOf(sessionFile);
+  if (idx === -1) {
+    mctx.ui.notify("ℹ️ This session was not opted out — nothing to do", "info");
+    return;
+  }
+  optedOut.splice(idx, 1);
+  cfg.optedOutSessions = optedOut.length > 0 ? optedOut : undefined;
+  saveConfig(cfg);
+  mctx.ui.notify("✅ This session can now take over the Slack bridge again", "info");
 }
 
 // ── Main menu ───────────────────────────────────────────────────────────────
@@ -131,6 +170,8 @@ export async function openMainMenu(mctx: MenuContext): Promise<void> {
       connected ? "Disconnect" : "Connect",
       "Configure",
       "Widget",
+      "Opt out",
+      "Opt in",
       "Help",
     ];
 
@@ -149,6 +190,12 @@ export async function openMainMenu(mctx: MenuContext): Promise<void> {
         break;
       case "Widget":
         doToggleWidget(mctx);
+        break;
+      case "Opt out":
+        doOptOut(mctx);
+        break;
+      case "Opt in":
+        doOptIn(mctx);
         break;
       case "Help":
         showHelp(mctx);

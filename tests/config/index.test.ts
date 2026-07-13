@@ -56,7 +56,7 @@ describe('config', () => {
     const { saveConfig } = await importConfig();
     saveConfig({});
 
-    const stats = statSync(join(tmpDir, '.pi', 'msg-bridge.json'));
+    const stats = statSync(join(tmpDir, '.pi', 'slk-bridge.json'));
     expect(stats.mode & 0o777).toBe(0o600);
   });
 
@@ -88,7 +88,7 @@ describe('config', () => {
   it('handles corrupted config file gracefully', async () => {
     const piDir = join(tmpDir, '.pi');
     mkdirSync(piDir, { recursive: true });
-    writeFileSync(join(piDir, 'msg-bridge.json'), '{invalid json!!!');
+    writeFileSync(join(piDir, 'slk-bridge.json'), '{invalid json!!!');
 
     const { loadConfig } = await importConfig();
     // Should not throw, returns empty config
@@ -99,7 +99,7 @@ describe('config', () => {
   it('still applies env vars when config file is corrupted', async () => {
     const piDir = join(tmpDir, '.pi');
     mkdirSync(piDir, { recursive: true });
-    writeFileSync(join(piDir, 'msg-bridge.json'), 'not json');
+    writeFileSync(join(piDir, 'slk-bridge.json'), 'not json');
 
     process.env.PI_SLACK_BOT_TOKEN = 'xoxb-env';
     process.env.PI_SLACK_APP_TOKEN = 'xapp-env';
@@ -131,5 +131,29 @@ describe('config', () => {
   it('hideToolCalls defaults to undefined (not hidden)', async () => {
     const { loadConfig } = await importConfig();
     expect(loadConfig().hideToolCalls).toBeUndefined();
+  });
+
+  it('loads legacy msg-bridge.json as fallback', async () => {
+    const piDir = join(tmpDir, '.pi');
+    mkdirSync(piDir, { recursive: true });
+    writeFileSync(join(piDir, 'msg-bridge.json'), JSON.stringify({ slack: { botToken: 'xoxb-legacy', appToken: 'xapp-legacy' }, autoConnect: true }));
+
+    const { loadConfig } = await importConfig();
+    const config = loadConfig();
+    expect(config.slack?.botToken).toBe('xoxb-legacy');
+    expect(config.slack?.appToken).toBe('xapp-legacy');
+    expect(config.autoConnect).toBe(true);
+  });
+
+  it('prefers slk-bridge.json over legacy msg-bridge.json', async () => {
+    const piDir = join(tmpDir, '.pi');
+    mkdirSync(piDir, { recursive: true });
+    writeFileSync(join(piDir, 'msg-bridge.json'), JSON.stringify({ slack: { botToken: 'xoxb-legacy', appToken: 'xapp-legacy' } }));
+    writeFileSync(join(piDir, 'slk-bridge.json'), JSON.stringify({ slack: { botToken: 'xoxb-new', appToken: 'xapp-new' } }));
+
+    const { loadConfig } = await importConfig();
+    const config = loadConfig();
+    expect(config.slack?.botToken).toBe('xoxb-new');
+    expect(config.slack?.appToken).toBe('xapp-new');
   });
 });

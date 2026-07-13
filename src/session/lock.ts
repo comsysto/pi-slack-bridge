@@ -17,7 +17,8 @@ import * as path from "path";
  */
 
 const CONFIG_DIR = path.join(os.homedir(), ".pi");
-const LOCK_PATH = path.join(CONFIG_DIR, "msg-bridge.lock");
+const LOCK_PATH = path.join(CONFIG_DIR, "slk-bridge.lock");
+const LEGACY_LOCK_PATH = path.join(CONFIG_DIR, "msg-bridge.lock");
 
 const g = global as any;
 if (!g.__msgBridgeInstanceId) {
@@ -58,13 +59,14 @@ export function getInstanceId(): string {
 
 export function getLockOwner(): LockInfo | null {
   try {
-    if (!fs.existsSync(LOCK_PATH)) return null;
-    const raw = fs.readFileSync(LOCK_PATH, "utf-8");
+    const lockPath = resolveLockPath();
+    if (!fs.existsSync(lockPath)) return null;
+    const raw = fs.readFileSync(lockPath, "utf-8");
     const info = parseLockInfo(raw);
     if (!info) return null;
     if (info.pid !== process.pid && !isProcessAlive(info.pid)) {
       try {
-        fs.unlinkSync(LOCK_PATH);
+        fs.unlinkSync(lockPath);
       } catch {
         // ignore stale cleanup failures
       }
@@ -74,6 +76,12 @@ export function getLockOwner(): LockInfo | null {
   } catch {
     return null;
   }
+}
+
+/** For writing, always use the new path. For reading, prefer new but fall back to legacy. */
+function resolveLockPath(forWrite: boolean = false): string {
+  if (forWrite) return LOCK_PATH;
+  return fs.existsSync(LOCK_PATH) ? LOCK_PATH : LEGACY_LOCK_PATH;
 }
 
 export function isLockHeldLocally(): boolean {
@@ -105,7 +113,7 @@ export function acquireLock(): boolean {
     }
 
     ensureConfigDir();
-    fs.writeFileSync(LOCK_PATH, `${process.pid}:${instanceId}`, { mode: 0o600 });
+    fs.writeFileSync(resolveLockPath(true), `${process.pid}:${instanceId}`, { mode: 0o600 });
   } catch {
     // lock file mechanics failed — fall through, global flag is still set below
   }
@@ -120,7 +128,7 @@ export function forceAcquireLock(): LockInfo | null {
 
   try {
     ensureConfigDir();
-    fs.writeFileSync(LOCK_PATH, `${process.pid}:${instanceId}`, { mode: 0o600 });
+    fs.writeFileSync(resolveLockPath(true), `${process.pid}:${instanceId}`, { mode: 0o600 });
   } catch {
     // ignore lock file failures; local ownership state is still updated below
   }
@@ -135,8 +143,11 @@ export function releaseLock(): void {
   g.__msgBridgeConnected = false;
   g.__msgBridgeOwner = undefined;
   try {
-    if (fs.existsSync(LOCK_PATH)) {
-      const raw = fs.readFileSync(LOCK_PATH, "utf-8");
+    // Always read from the path that exists (new or legacy), but only unlink the new path
+    // since that's where we always write.
+    const existingLockPath = resolveLockPath(false);
+    if (fs.existsSync(existingLockPath)) {
+      const raw = fs.readFileSync(existingLockPath, "utf-8");
       const info = parseLockInfo(raw);
       if (info && info.pid === process.pid && info.owner === instanceId) {
         fs.unlinkSync(LOCK_PATH);

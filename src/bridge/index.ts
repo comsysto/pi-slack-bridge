@@ -416,7 +416,7 @@ export default function (pi: ExtensionAPI): void {
     const cwd = resolvePathInput(cwdArg?.trim() ? cwdArg : ctx.cwd, ctx.cwd);
     const result = await runTmuxPiConnect({
       cwd,
-      bridgeCommand: "/msg-bridge connect user-request",
+      bridgeCommand: "/slk-bridge connect user-request",
     });
     return buildTmuxConnectSummary(result);
   }
@@ -432,7 +432,7 @@ export default function (pi: ExtensionAPI): void {
     const result = await runTmuxPiConnect({
       cwd,
       piArgs: ["--session", selected.path],
-      bridgeCommand: "/msg-bridge connect user-request",
+      bridgeCommand: "/slk-bridge connect user-request",
     });
     return buildTmuxConnectSummary(result);
   }
@@ -1046,6 +1046,7 @@ export default function (pi: ExtensionAPI): void {
             saveConfig(cfg);
             await connectCurrentSession({ showTakeoverNotice: true, handoverReason: "user-request" });
           },
+          getCurrentSessionFile,
         });
         return;
       }
@@ -1089,23 +1090,13 @@ export default function (pi: ExtensionAPI): void {
         }
 
         case "configure": {
-          const platform = parts[1];
-          const token = parts.slice(2).join(" ");
-
-          if (!platform || platform.toLowerCase() !== "slack") {
-            context.ui.notify(
-              "Usage: /msg-bridge configure slack <bot-token> <app-token>\nOnly Slack is supported in this build.",
-              "error",
-            );
-            return;
-          }
-
+          const token = parts.slice(1).join(" ");
           const parts2 = token.split(/\s+/);
           const botToken = parts2[0];
           const appToken = parts2[1];
 
           if (!botToken || !appToken) {
-            context.ui.notify("Usage: /msg-bridge configure slack <bot-token> <app-token>", "error");
+            context.ui.notify("Usage: /slk-bridge configure <bot-token> <app-token>", "error");
             return;
           }
 

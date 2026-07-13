@@ -17,7 +17,7 @@ export interface TransportFileOptions {
 // Dynamic import for ESM modules
 type App = any;
 
-const SLACK_DOWNLOAD_DIR = path.join(os.homedir(), ".pi", "msg-bridge-downloads", "slack");
+const SLACK_DOWNLOAD_DIR = path.join(os.homedir(), ".pi", "slk-bridge-downloads", "slack");
 
 function ensureSlackDownloadDir(): void {
   if (!fs.existsSync(SLACK_DOWNLOAD_DIR)) {

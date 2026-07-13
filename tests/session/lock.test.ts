@@ -8,7 +8,7 @@ describe('lock', () => {
   const g = global as any;
 
   beforeEach(() => {
-    tmpDir = mkdtempSync(join(tmpdir(), 'msg-bridge-lock-'));
+    tmpDir = mkdtempSync(join(tmpdir(), 'slk-bridge-lock-'));
     delete g.__msgBridgeInstanceId;
     delete g.__msgBridgeConnected;
     delete g.__msgBridgeOwner;
@@ -35,7 +35,7 @@ describe('lock', () => {
     expect(acquireLock()).toBe(true);
     expect(g.__msgBridgeConnected).toBe(true);
 
-    const lockPath = join(tmpDir, '.pi', 'msg-bridge.lock');
+    const lockPath = join(tmpDir, '.pi', 'slk-bridge.lock');
     const content = readFileSync(lockPath, 'utf-8');
     const [pid, owner] = content.split(':');
     expect(parseInt(pid, 10)).toBe(process.pid);
@@ -55,7 +55,7 @@ describe('lock', () => {
     releaseLock();
     expect(g.__msgBridgeConnected).toBe(false);
     expect(g.__msgBridgeOwner).toBeUndefined();
-    expect(existsSync(join(tmpDir, '.pi', 'msg-bridge.lock'))).toBe(false);
+    expect(existsSync(join(tmpDir, '.pi', 'slk-bridge.lock'))).toBe(false);
   });
 
   it('acquire → release → re-acquire works', async () => {
@@ -67,7 +67,7 @@ describe('lock', () => {
 
     expect(acquireLock()).toBe(true);
     expect(g.__msgBridgeConnected).toBe(true);
-    expect(existsSync(join(tmpDir, '.pi', 'msg-bridge.lock'))).toBe(true);
+    expect(existsSync(join(tmpDir, '.pi', 'slk-bridge.lock'))).toBe(true);
   });
 
   it('blocks a different instance in the same process (layer 1)', async () => {
@@ -84,7 +84,7 @@ describe('lock', () => {
   it('overwrites stale lock from dead process (layer 2)', async () => {
     const piDir = join(tmpDir, '.pi');
     mkdirSync(piDir, { recursive: true });
-    writeFileSync(join(piDir, 'msg-bridge.lock'), '1073741824:stale-owner');
+    writeFileSync(join(piDir, 'slk-bridge.lock'), '1073741824:stale-owner');
 
     const { acquireLock } = await importLock(tmpDir);
     expect(acquireLock()).toBe(true);
@@ -93,7 +93,7 @@ describe('lock', () => {
   it('blocks when a live process holds the lock (layer 2)', async () => {
     const piDir = join(tmpDir, '.pi');
     mkdirSync(piDir, { recursive: true });
-    writeFileSync(join(piDir, 'msg-bridge.lock'), `${process.pid}:other-instance`);
+    writeFileSync(join(piDir, 'slk-bridge.lock'), `${process.pid}:other-instance`);
 
     const { acquireLock } = await importLock(tmpDir);
     expect(acquireLock()).toBe(false);
@@ -109,7 +109,7 @@ describe('lock', () => {
 
     g.__msgBridgeOwner = realOwner;
     expect(g.__msgBridgeConnected).toBe(true);
-    expect(existsSync(join(tmpDir, '.pi', 'msg-bridge.lock'))).toBe(true);
+    expect(existsSync(join(tmpDir, '.pi', 'slk-bridge.lock'))).toBe(true);
   });
 
   it('creates .pi directory if missing', async () => {
@@ -123,13 +123,13 @@ describe('lock', () => {
   it('forceAcquireLock overwrites another owner', async () => {
     const piDir = join(tmpDir, '.pi');
     mkdirSync(piDir, { recursive: true });
-    writeFileSync(join(piDir, 'msg-bridge.lock'), `${process.pid}:other-instance`);
+    writeFileSync(join(piDir, 'slk-bridge.lock'), `${process.pid}:other-instance`);
 
     const { forceAcquireLock } = await importLock(tmpDir);
     const previousOwner = forceAcquireLock();
 
     expect(previousOwner).toEqual({ pid: process.pid, owner: 'other-instance' });
-    expect(readFileSync(join(piDir, 'msg-bridge.lock'), 'utf-8')).toBe(`${process.pid}:${g.__msgBridgeInstanceId}`);
+    expect(readFileSync(join(piDir, 'slk-bridge.lock'), 'utf-8')).toBe(`${process.pid}:${g.__msgBridgeInstanceId}`);
     expect(g.__msgBridgeConnected).toBe(true);
     expect(g.__msgBridgeOwner).toBe(g.__msgBridgeInstanceId);
   });
@@ -151,7 +151,7 @@ describe('lock', () => {
     expect(isCurrentLockOwner()).toBe(true);
 
     writeFileSync(
-      join(tmpDir, '.pi', 'msg-bridge.lock'),
+      join(tmpDir, '.pi', 'slk-bridge.lock'),
       `${process.pid}:someone-else`,
     );
 
