@@ -1025,9 +1025,9 @@ export default function (pi: ExtensionAPI): void {
     releaseLock();
   });
 
-  // ── /msg-bridge command (TUI local) ──────────────────────────────────────
+  // ── /slk-bridge command (TUI local) ────────────────────────────────────────
 
-  pi.registerCommand("msg-bridge", {
+  pi.registerCommand("slk-bridge", {
     description: "Manage Slack bridge connection (help|status|connect|disconnect|configure|widget|new|list-sessions|switch)",
     handler: async (args: string, context) => {
       const parts = args.trim().split(/\s+/).filter((p) => p.length > 0);
