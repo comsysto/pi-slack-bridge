@@ -145,14 +145,5 @@ describe('config', () => {
     expect(config.autoConnect).toBe(true);
   });
 
-  it('ignores msg-bridge.json (legacy only, no fallback)', async () => {
-    const piDir = join(tmpDir, '.pi');
-    mkdirSync(piDir, { recursive: true });
-    writeFileSync(join(piDir, 'msg-bridge.json'), JSON.stringify({ slack: { botToken: 'xoxb-legacy', appToken: 'xapp-legacy' }, autoConnect: true }));
 
-    const { loadConfig } = await importConfig();
-    const config = loadConfig();
-    // Legacy file should be ignored — only slk-bridge.json is read
-    expect(config).toEqual({});
-  });
 });

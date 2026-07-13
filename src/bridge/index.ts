@@ -19,7 +19,6 @@
  *   ui/status-widget.ts — Status widget
  */
 
-import { promisify } from "node:util";
 import { execFile } from "node:child_process";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -41,7 +40,6 @@ import {
   hasLatestAssistantBeenDeliveredToSlackThread,
   getSlackThreadOwnerSession,
   getRememberedSlackThreadForCurrentSession,
-  getSlackRoutingState,
 } from "../slack/routing.js";
 import {
   acquireLock,
@@ -55,8 +53,6 @@ import {
   buildSlackFooterText,
   getConversationHistory,
   getLastAssistantMessageInfo,
-  getLastAssistantMessageText,
-  getAllAssistantMessages,
   buildSessionListText,
   listRecentSessions,
 } from "../session/handlers.js";
@@ -70,8 +66,6 @@ import {
 import { openMainMenu } from "../ui/main-menu.js";
 import { createStatusWidget } from "../ui/status-widget.js";
 import type { ExternalMessage, PendingRemoteChat } from "../types/index.js";
-
-const execFileAsync = promisify(execFile);
 
 export default function (pi: ExtensionAPI): void {
   let slackClient: SlackClient | null = null;
