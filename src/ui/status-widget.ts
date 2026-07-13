@@ -1,5 +1,7 @@
 /**
- * Status widget showing Slack bridge connection status
+ * Status widget showing Slack bridge connection status.
+ * Renders a minimal ascii dot (● connected / ○ disconnected)
+ * that matches the style of /slk-bridge status output.
  */
 
 export interface SlackStatus {
@@ -8,13 +10,8 @@ export interface SlackStatus {
 
 export function createStatusWidget(
   slackStatus: SlackStatus,
-  usersByTransport: Record<string, string[]>
+  _usersByTransport: Record<string, string[]>
 ): string | undefined {
-  const userCount = usersByTransport.slack?.length || 0;
-  const userSuffix = userCount > 0 ? `:${userCount}` : "";
-  const abbrev = "slk";
-
-  return slackStatus.connected
-    ? `💬 [${abbrev}${userSuffix}]`
-    : undefined;
+  // Minimal dot + slk label — matches /slk-bridge status output style: ● slack / ○ slack
+  return slackStatus.connected ? "● slk" : "○ slk";
 }

@@ -720,13 +720,12 @@ export default function (pi: ExtensionAPI): void {
       return;
     }
 
-    const stats = auth.getStats();
     const widget = createStatusWidget(
       { connected: slackIsConnected() },
-      stats.usersByTransport,
+      { slack: [] },
     );
     if (widget) {
-      ctx.ui.setWidget("msg-bridge-status", [widget]);
+      ctx.ui.setWidget("msg-bridge-status", [widget], { placement: "belowEditor" });
     } else {
       ctx.ui.setWidget("msg-bridge-status", undefined);
     }
