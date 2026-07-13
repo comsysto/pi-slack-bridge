@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import type { MsgBridgeConfig } from "../types/index.js";
+import type { SlackBridgeConfig } from "../types/index.js";
 
 const CONFIG_DIR = path.join(os.homedir(), ".pi");
 const CONFIG_PATH = path.join(CONFIG_DIR, "msg-bridge.json");
@@ -9,8 +9,8 @@ const CONFIG_PATH = path.join(CONFIG_DIR, "msg-bridge.json");
 /**
  * Load config from file and env vars (env vars override file).
  */
-export function loadConfig(): MsgBridgeConfig {
-  const config: MsgBridgeConfig = {};
+export function loadConfig(): SlackBridgeConfig {
+  const config: SlackBridgeConfig = {};
 
   if (fs.existsSync(CONFIG_PATH)) {
     try {
@@ -28,25 +28,10 @@ export function loadConfig(): MsgBridgeConfig {
   }
 
   // Environment variables override file config (higher priority)
-  if (process.env.PI_TELEGRAM_TOKEN) {
-    config.telegram = { token: process.env.PI_TELEGRAM_TOKEN };
-  }
-  if (process.env.PI_WHATSAPP_AUTH_PATH) {
-    config.whatsapp = { authPath: process.env.PI_WHATSAPP_AUTH_PATH };
-  }
   if (process.env.PI_SLACK_BOT_TOKEN && process.env.PI_SLACK_APP_TOKEN) {
     config.slack = {
       botToken: process.env.PI_SLACK_BOT_TOKEN,
       appToken: process.env.PI_SLACK_APP_TOKEN,
-    };
-  }
-  if (process.env.PI_DISCORD_TOKEN) {
-    config.discord = { token: process.env.PI_DISCORD_TOKEN };
-  }
-  if (process.env.PI_MATRIX_HOMESERVER && process.env.PI_MATRIX_ACCESS_TOKEN) {
-    config.matrix = {
-      homeserverUrl: process.env.PI_MATRIX_HOMESERVER,
-      accessToken: process.env.PI_MATRIX_ACCESS_TOKEN,
     };
   }
 
@@ -56,7 +41,7 @@ export function loadConfig(): MsgBridgeConfig {
 /**
  * Save config to file with secure permissions.
  */
-export function saveConfig(config: MsgBridgeConfig): void {
+export function saveConfig(config: SlackBridgeConfig): void {
   if (!fs.existsSync(CONFIG_DIR)) {
     fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
   }

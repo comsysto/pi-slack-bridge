@@ -1,52 +1,42 @@
 /**
- * External message received from a messenger transport
+ * Shared type definitions for the Slack bridge extension.
+ */
+
+/**
+ * External message received from Slack.
  */
 export interface ExternalMessage {
-  /** Unique chat/channel identifier */
+  /** Slack channel ID */
   chatId: string;
-  /** Transport type (telegram, whatsapp, etc) */
+  /** Transport type — always "slack" in this build */
   transport: string;
   /** Message content/text */
   content: string;
   /** Sender username */
   username: string;
-  /** Sender user ID */
+  /** Sender Slack user ID */
   userId: string;
   /** Message timestamp */
   timestamp: Date;
-  /** Unique message identifier */
+  /** Slack message timestamp (ts) */
   messageId: string;
   /** Is this a group/channel message? */
   isGroupChat: boolean;
   /** Was the bot mentioned? (for group chats) */
   wasMentioned?: boolean;
-  /** Transport-specific reply thread/root identifier, when available */
+  /** Slack thread_ts when replying inside a thread */
   threadId?: string;
   /** Whether the incoming message was sent as a reply inside an existing thread */
   isThreadReply?: boolean;
 }
 
 /**
- * Configuration for msg-bridge extension
+ * Slack bridge configuration.
  */
-export interface MsgBridgeConfig {
-  telegram?: {
-    token: string;
-  };
-  whatsapp?: {
-    authPath?: string;
-  };
+export interface SlackBridgeConfig {
   slack?: {
     botToken: string;
     appToken: string;
-  };
-  discord?: {
-    token: string;
-  };
-  matrix?: {
-    homeserverUrl: string;
-    accessToken: string;
-    encryption?: boolean;
   };
   auth?: {
     trustedUsers?: string[];
@@ -69,7 +59,7 @@ export interface MsgBridgeConfig {
 }
 
 /**
- * Pending remote chat session tracking
+ * Pending remote chat session tracking.
  */
 export interface PendingRemoteChat {
   chatId: string;
@@ -81,7 +71,7 @@ export interface PendingRemoteChat {
 }
 
 /**
- * Transport connection status
+ * Transport connection status.
  */
 export interface TransportStatus {
   type: string;
