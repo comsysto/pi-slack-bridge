@@ -716,18 +716,18 @@ export default function (pi: ExtensionAPI): void {
     const config = loadConfig();
 
     if (config.showWidget === false) {
-      ctx.ui.setWidget("msg-bridge-status", undefined);
+      ctx.ui.setStatus("msg-bridge-status", undefined);
       return;
     }
 
-    const widget = createStatusWidget(
+    const statusText = createStatusWidget(
       { connected: slackIsConnected() },
       { slack: [] },
     );
-    if (widget) {
-      ctx.ui.setWidget("msg-bridge-status", [widget], { placement: "belowEditor" });
+    if (statusText) {
+      ctx.ui.setStatus("msg-bridge-status", statusText);
     } else {
-      ctx.ui.setWidget("msg-bridge-status", undefined);
+      ctx.ui.setStatus("msg-bridge-status", undefined);
     }
   }
 
