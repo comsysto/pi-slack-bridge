@@ -1,4 +1,4 @@
-# Contributing to pi-messenger-bridge
+# Contributing to pi-slack-bridge
 
 Thank you for your interest in contributing! 🎉
 
@@ -6,8 +6,8 @@ Thank you for your interest in contributing! 🎉
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/tintinweb/pi-messenger-bridge.git
-   cd pi-messenger-bridge
+   git clone https://github.com/thanhh/pi-slack-bridge.git
+   cd pi-slack-bridge
    ```
 
 2. **Install dependencies**
@@ -22,61 +22,46 @@ Thank you for your interest in contributing! 🎉
 
 4. **Test locally**
    ```bash
-   # Set up your test bot token
-   export PI_TELEGRAM_TOKEN="your-test-bot-token"
+   # Set up your Slack tokens (see README.md for details)
+   export PI_SLACK_BOT_TOKEN="xoxb-your-slack-bot-token"
+   export PI_SLACK_APP_TOKEN="xapp-your-slack-app-token"
    
    # Option A: Install in pi
-   pi install /path/to/pi-messenger-bridge
+   pi install /path/to/pi-slack-bridge
    pi
-   /msg-bridge connect
+   /slk-bridge connect
    
    # Option B: Load directly from source (faster for development)
-   pi -e ./src/index.ts
-   /msg-bridge connect
+   pi -e src/bridge/index.ts
+   /slk-bridge connect
    ```
 
 ## Project Structure
 
 ```
 src/
-├── index.ts              # Main entry point (event handlers, commands)
-├── types.ts              # TypeScript interfaces
+├── bridge/
+│   ├── index.ts              # Main entry point (event handlers, commands)
+│   └── commands.ts           # Command definitions and dispatch
+├── slack/
+│   ├── client.ts             # Slack Socket Mode client connection
+│   ├── routing.ts            # Message routing between Slack and pi
+│   ├── formatting.ts         # Markdown-to-Block-Kit formatting
+│   └── blocks.ts             # Block Kit message builders
+├── session/
+│   ├── tmux.ts               # tmux-backed session management
+│   ├── handlers.ts           # Session switching and handoff logic
+│   └── lock.ts               # Single-instance lock guard
 ├── auth/
-│   └── challenge-auth.ts # Authentication system
-├── transports/
-│   ├── interface.ts      # ITransportProvider interface
-│   ├── manager.ts        # Message routing
-│   └── telegram.ts       # Telegram implementation
+│   └── challenge.ts          # Challenge-based user authentication
+├── config/
+│   └── index.ts              # Config loading and validation
+├── types/
+│   └── index.ts              # TypeScript interfaces and types
 └── ui/
-    └── status-widget.ts  # Status display
+    ├── status-widget.ts      # Terminal status display widget
+    └── main-menu.ts          # Interactive configuration menu
 ```
-
-## Adding a New Transport
-
-To add support for a new messenger (e.g., WhatsApp, Slack, Discord):
-
-1. **Create a provider** in `src/transports/<name>.ts`
-   ```typescript
-   import type { ITransportProvider } from "./interface.js";
-   import type { ChallengeAuth } from "../auth/challenge-auth.js";
-   
-   export class WhatsAppProvider implements ITransportProvider {
-     readonly type = "whatsapp";
-     // Implement all ITransportProvider methods
-   }
-   ```
-
-2. **Register in index.ts**
-   ```typescript
-   if (config.whatsapp?.token) {
-     const whatsappProvider = new WhatsAppProvider(config.whatsapp.token, auth);
-     transportManager.addTransport(whatsappProvider);
-   }
-   ```
-
-3. **Update types** if needed in `src/types.ts`
-
-4. **Update docs** in README.md and GETTING_STARTED.md
 
 ## Code Style
 
@@ -87,17 +72,24 @@ To add support for a new messenger (e.g., WhatsApp, Slack, Discord):
 
 ## Testing
 
-Currently, testing is manual. Automated tests welcome!
+Run the test suite:
+
+```bash
+npm run test
+```
 
 Manual testing checklist:
-- [ ] Bot connects successfully
-- [ ] Challenge codes appear in terminal
+- [ ] Bridge connects successfully via Socket Mode
+- [ ] Challenge codes appear in terminal when new user messages
 - [ ] Authentication works (correct code)
-- [ ] Authentication fails properly (wrong code, too many attempts)
+- [ ] Authentication fails properly (wrong code, too many attempts, expiry)
 - [ ] Messages are sent and received correctly
-- [ ] Group chat mention detection works
-- [ ] Admin commands work
+- [ ] Slack Block Kit markdown formatting renders properly
+- [ ] File uploads and downloads work
+- [ ] Session management works (new, list-sessions, switch)
+- [ ] Opt in/out of bridge takeover works
 - [ ] Widget displays correct status
+- [ ] Deterministic dot commands work (`.bridge`)
 
 ## Pull Request Process
 
@@ -124,17 +116,17 @@ Follow conventional commits:
 
 Examples:
 ```
-feat: add WhatsApp transport support
-fix: handle undefined username in Telegram messages
-docs: update GETTING_STARTED with group chat setup
+feat: add file upload support from Slack
+fix: handle empty message blocks in formatting
+docs: update README with new session commands
 ```
 
 ## Reporting Issues
 
 When reporting bugs, include:
 
-- pi version
-- Extension version
+- pi version (`pi --version`)
+- Extension version (see `package.json`)
 - Operating system
 - Steps to reproduce
 - Expected vs actual behavior
