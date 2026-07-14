@@ -55,6 +55,10 @@ import {
   buildSessionListText,
   listRecentSessions,
 } from "../session/handlers.js";
+import {
+  replayConversationToExistingThread,
+  replayConversationToNewThread,
+} from "../session/replay.js";
 import { buildTmuxConnectSummary, resolvePathInput, runTmuxPiConnect } from "../session/tmux.js";
 import {
   buildBridgeStatusText,
@@ -672,6 +676,36 @@ export default function (pi: ExtensionAPI): void {
             await sendRemoteText(message, `❌ File upload failed: ${(err as Error).message}`);
           }
           return true;
+        case "replay": {
+          const conversation = getConversationHistory(ctx.sessionManager);
+          if (conversation.length === 0) {
+            await sendRemoteText(message, "No conversation history to replay.");
+            return true;
+          }
+          const threadTs = await sendToRemoteChat(message.chatId, "📋 **Conversation Replay**", {
+            threadId: message.threadId,
+            forceTopLevel: !message.threadId,
+          });
+          if (!threadTs) {
+            await sendRemoteText(message, "❌ Failed to start replay thread.");
+            return true;
+          }
+          for (const entry of conversation) {
+            const text = entry.role === "user"
+              ? `🗣️ **User:** ${entry.text}`
+              : entry.text;
+            await sendToRemoteChat(message.chatId, text, { threadId: threadTs });
+          }
+          markLatestAssistantDeliveredToSlackThread(
+            message.chatId,
+            threadTs,
+            undefined,
+            getCurrentSessionFile,
+            () => getLastAssistantMessageInfo(ctx.sessionManager),
+          );
+          await sendRemoteText(message, `✅ Replayed ${conversation.length} message${conversation.length === 1 ? "" : "s"} to thread.`);
+          return true;
+        }
         default:
           await sendRemoteText(message, `Unknown bridge command: ${subcommand}`);
           return true;

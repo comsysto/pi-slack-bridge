@@ -65,6 +65,7 @@ export function buildRemoteCommandList(
     "- `.bridge new [cwd]`",
     "- `.bridge list-sessions [number]`",
     "- `.bridge switch <number>`",
+    "- `.bridge replay`",
     "- `.bridge sendfile <path>`",
   ];
 
