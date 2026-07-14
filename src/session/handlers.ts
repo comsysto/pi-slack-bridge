@@ -183,6 +183,7 @@ export async function listRecentSessions(limit?: number): Promise<Array<{
   path: string;
   cwd: string;
   firstPrompt: string;
+  messageCount: number;
 }>> {
   const sessions = await SessionManager.listAll();
   const sorted = sessions
@@ -191,6 +192,7 @@ export async function listRecentSessions(limit?: number): Promise<Array<{
       path: session.path,
       cwd: session.cwd || "(unknown cwd)",
       firstPrompt: truncate((session.firstMessage || "(no prompt)").replace(/\s+/g, " ").trim(), 300),
+      messageCount: session.messageCount,
     }));
 
   return limit ? sorted.slice(0, limit) : sorted;
@@ -204,7 +206,7 @@ export async function buildSessionListText(limit: number = 10): Promise<string> 
 
   const lines = ["Previous sessions", ""];
   sessions.forEach((session, index) => {
-    lines.push(`${index + 1}. **${session.cwd}** — ${session.firstPrompt}`);
+    lines.push(`${index + 1}. **${session.cwd}** — ${session.firstPrompt}, *${session.messageCount} messages*`);
   });
 
   return lines.join("\n").trimEnd();
