@@ -1,122 +1,45 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-
 ## [Unreleased]
 
-## [0.4.0] - 2026-05-09
+## [0.1.0] - 2026-07-14
 
 ### Added
-- Matrix transport via `matrix-bot-sdk` — works with Element X, Element Web, FluffyChat, any Matrix client. Auto-joins rooms, group chat support with mention detection, optional E2EE (Rust SDK crypto store). Set `"encryption": false` in the `matrix` config to disable E2EE (thanks @jchidley)
-- `hideToolCalls` config option, `/msg-bridge toggletools` pi command, and matching `/toggletools` DM admin command — trusted users can hide/show tool call summaries in their replies from either side
-- Empty-message guard in all transports (Discord, Telegram, Slack, WhatsApp, Matrix) to prevent provider errors on whitespace-only payloads
+- **Pure Slack fork** — removed all non-Slack transports (Telegram, WhatsApp, Discord, Matrix) and their interface/manager abstractions
+- **Slack Block Kit formatting** — `src/slack/blocks.ts` converts markdown to Slack's native markdown blocks with smart splitting that keeps tables, code blocks, and lists intact
+- **tmux-backed session management** — `src/session/tmux.ts` spawns new pi sessions; `list-sessions`/`switch` commands navigate recent sessions; each session gets its own Slack thread
+- **Thread-to-session routing** — `src/slack/routing.ts` persists thread↔session mapping in config so continuing a Slack thread resumes the right session
+- **Bridge takeover with opt-out** — sessions can opt in/out of automatic bridge takeover; force-acquire mechanism for manual override
+- **Claim management** — after first auth, new DM claims stay closed until `/slk-bridge releaseclaim` is called; user chats remembered for notification routing
+- **Turn response accumulation** — messages accumulate during a turn and flush at `agent_end`, avoiding fragmented Slack messages
+- **Session handoff with replay** — handoff files in `~/.pi/slk-bridge-handoffs/`, background replay that doesn't block pi input, full conversation history on handover
+- **Status footer** — simplified bridge status shown in pi's footer line via `setStatus` instead of a widget block
+- **Dot commands** — `.bridge` remote commands for skills, prompt templates, and native bridge commands
+- **File upload/download** — Slack files saved to `~/.pi/slk-bridge-downloads/slack/`, file uploads from bridge to Slack
+- **New commands**: `/slk-bridge new [path]`, `/slk-bridge list-sessions [number]`, `/slk-bridge switch <number>`, `/slk-bridge optout`, `/slk-bridge optin`, `/slk-bridge releaseclaim`, `/slk-bridge accept-handoff`
 
 ### Changed
-- Tool call summaries now wrap the tool name in inline-code backticks (`🔧 \`hud_canvas\` (...)`), rendering as code across all 5 transports and avoiding Telegram's underscore-escape backslashes leaking into messages
-- Migrated peer dependencies from deprecated `@mariozechner/pi-{ai,coding-agent,tui}` to `@earendil-works/pi-{ai,coding-agent,tui}` (>=0.74). The `@mariozechner` packages were deprecated upstream with the message "please use @earendil-works/pi-coding-agent instead going forward"
-- Tightened peer constraints from `*` to `>=0.74` and removed the duplicated entries from devDependencies (npm auto-installs peers in dev)
-- Bumped devDependency floors: `@biomejs/biome` ^2.4.14, `@types/node` ^25.6.2, `typescript` ^6.0.3, `vitest` ^4.1.5
+- **Command namespace**: `/msg-bridge` → `/slk-bridge`
+- **Config file**: `~/.pi/msg-bridge.json` → `~/.pi/slk-bridge.json`
+- **Environment variables**: `MSG_BRIDGE_DEBUG` → `SLK_BRIDGE_DEBUG`
+- **Project structure**: flat multi-transport layout → DDD structure (`bridge/`, `slack/`, `session/`, `auth/`, `config/`, `types/`, `ui/`)
+- **Auth**: simplified from transport-scoped claim maps to a single `claimOpen` boolean; user IDs no longer namespaced
+- **Lock guard**: moved to `src/session/lock.ts` with force-acquire and ownership timer
+- **Status widget**: simplified from widget block to footer line via `setStatus`
+- **Config persistence**: added `slackRouting` state (thread mappings, delivery tracking)
+
+### Removed
+- All non-Slack transports (Telegram, WhatsApp, Discord, Matrix) and their interface/manager abstractions
+- `src/formatting.ts`, `src/lock.ts`, `src/types.ts`, `src/index.ts` — replaced by Slack-specific equivalents
+- `transport` abstraction layer — all transport parameters, branching checks, and namespacing removed
+- 12000-char pre-split optimization — `sendMessageInThread` handles splitting natively
+- Legacy `msg-bridge` fallback paths and dead code
 
 ### Fixed
-- `sendUserMessage` crash when a remote message arrives mid-turn — messages are now queued via `{ deliverAs: "followUp" }` so each remote message gets its own turn after the current one finishes, instead of being interleaved into it (fixes #10)
-- `pendingRemoteChat` no longer cleared on tool-call-only turns, so the next response reaches the right chat
-- Whitespace-only assistant responses no longer trigger Discord's "Cannot send an empty message" error
-- Telegram MarkdownV1 parse errors on stray special chars (e.g. snake_case tool names like `hud_canvas` triggering `400 Bad Request: can't parse entities`). `formatForTelegram` now lifts valid markdown patterns into sentinel placeholders, escapes literal `_*[\``, then restores
+- `slk-bridge` command registration (was still `msg-bridge` in source after rename)
+- Session handover replay now fires as background task to unblock pi input processing
+- Context window token formatting consistent with pi TUI footer
+- Remaining `msg-bridge` references renamed across all source files
 
-## [0.3.0] - 2026-03-25
-
-### Added
-- Interactive menu (`/msg-bridge` with no args) — configure, connect, widget, help via `ui.select()`
-- Single-instance connection guard to prevent duplicate polling / 409 conflicts (fixes #2)
-  - Layer 1: global flag for same-process re-entrant calls (sub-agents)
-  - Layer 2: PID lock file (`~/.pi/msg-bridge.lock`) for cross-process duplicates
-- Session shutdown handler — releases lock and disconnects transports on exit
-- Lock check on `/msg-bridge configure` connect calls to prevent bypassing the guard
-- Test suite (vitest): config, lock, and formatting modules
-- CI workflow (GitHub Actions: lint + typecheck + test)
-- Biome linter configuration
-
-### Fixed
-- Discord DM messages not received — added required `Partials.Channel` and `Partials.Message` to client options (fixes #5, thanks @chr15m)
-- Transport errors now show clean messages instead of full stack traces
-
-### Changed
-- Extracted `config.ts`, `lock.ts`, `formatting.ts`, `ui/main-menu.ts` from index.ts
-- Moved `@mariozechner/pi-*` packages to peerDependencies
-- Updated devDependencies: typescript ^6.0.2, @types/node ^25.3.0, @biomejs/biome ^2.4.8, vitest ^4.1.1
-- `prepublishOnly` now runs lint and typecheck before build
-- Applied `npm audit fix` for transitive dependency vulnerabilities
-
-## [0.2.1] - 2026-02-11
-
-### Changed
-- Package renamed from `pi-msg-bridge` to `pi-messenger-bridge` for better clarity
-- Updated all repository URLs and documentation to reflect new package name
-- Command remains `/msg-bridge` for brevity and ease of use
-
-## [0.2.0] - 2026-02-11
-
-### Added
-- WhatsApp integration via Baileys library with QR code authentication
-- Slack integration with Socket Mode support
-- Discord integration with Message Content intent support
-- Debug mode for troubleshooting (config.debug or MSG_BRIDGE_DEBUG env var)
-- Non-blocking async transport initialization for faster startup
-- Widget toggle command (`/msg-bridge widget`)
-- Help command with full command reference
-- Automatic invalid session cleanup (WhatsApp 401 handling)
-- Session detection to prevent QR spam on startup
-
-### Changed
-- Renamed from "remote-pilot" to "msg-bridge" throughout codebase
-- Command changed from `/remote` to `/msg-bridge`
-- Config file moved from `~/.pi/msg-bridge/config.json` to `~/.pi/msg-bridge.json`
-- WhatsApp auth directory: `~/.pi/msg-bridge-whatsapp-auth/`
-- All debug output now behind debug flag (no spam by default)
-- Status widget only shows connected transports
-- Environment variables now override config file settings
-
-### Security
-- Config file permissions enforced: chmod 600 for files, 700 for directories
-- Config directory permissions validated on startup with warnings
-- WhatsApp auth directory created with secure permissions (700)
-- Invalid WhatsApp sessions automatically cleared on 401 errors
-
-### Fixed
-- QR code display for WhatsApp (using qrcode-terminal instead of Baileys built-in)
-- Tool call formatting now shows actual parameters instead of speculation
-- Username extraction from WhatsApp messages
-- Connection state tracking for accurate widget display
-- Startup performance (transports load in background)
-
-### Dependencies
-- Added: @whiskeysockets/baileys, qrcode-terminal, @slack/bolt, discord.js
-- Known vulnerabilities in transitive dependencies (node-telegram-bot-api, discord.js) - low impact for this use case
-
-## [0.1.0] - 2026-02-10
-
-### Added
-- Initial MVP release
-- Event-driven architecture using `pi.sendUserMessage()` and `turn_end` events
-- Telegram bot integration with polling support
-- Challenge-based authentication (6-digit codes)
-- Trusted user management
-- Admin commands for user and channel management
-- Status widget showing connection status
-- Commands: `/remote`, `/remote connect`, `/remote disconnect`, `/remote configure`
-- Environment variable and file-based configuration
-- Support for group chats with mention detection
-- Channel authorization modes: all, mentions, trusted-only
-
-### Security
-- 6-digit challenge codes with 2-minute expiry
-- 3-attempt limit with 5-minute blocking
-- First authenticated user becomes admin
-- Trusted user validation on all messages
-
-[unreleased]: https://github.com/tintinweb/pi-messenger-bridge/compare/v0.4.0...HEAD
-[0.4.0]: https://github.com/tintinweb/pi-messenger-bridge/releases/tag/v0.4.0
-[0.1.0]: https://github.com/tintinweb/pi-messenger-bridge/releases/tag/v0.1.0
+[unreleased]: https://github.com/thanhh/pi-slack-bridge/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/thanhh/pi-slack-bridge/releases/tag/v0.1.0
