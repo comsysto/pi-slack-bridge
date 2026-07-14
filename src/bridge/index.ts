@@ -73,12 +73,10 @@ export default function (pi: ExtensionAPI): void {
   let ctx: ExtensionContext;
   let ownershipTimer: NodeJS.Timeout | undefined;
   let ownershipCheckInProgress = false;
-  let transportInitialization: Promise<void> = Promise.resolve();
   const slackSessionThreads = new Map<string, string>();
   let activeSlackReaction: { chatId: string; messageId: string } | null = null;
   let turnAccumulator: {
     chatId: string;
-    transport: string;
     entries: string[];
     threadId?: string;
   } | null = null;
@@ -109,7 +107,6 @@ export default function (pi: ExtensionAPI): void {
   function toPendingRemoteChat(message: ExternalMessage): PendingRemoteChat {
     return {
       chatId: message.chatId,
-      transport: message.transport,
       username: message.username,
       messageId: message.messageId,
       threadId: message.threadId,
@@ -148,7 +145,7 @@ export default function (pi: ExtensionAPI): void {
   }
 
   async function setSlackWorkingReaction(remoteChat: PendingRemoteChat | null): Promise<void> {
-    if (!remoteChat || remoteChat.transport !== "slack") {
+    if (!remoteChat) {
       await clearSlackWorkingReaction();
       return;
     }
@@ -180,7 +177,6 @@ export default function (pi: ExtensionAPI): void {
 
   async function sendToRemoteChat(
     chatId: string,
-    transport: string,
     text: string,
     options?: {
       threadId?: string;
@@ -189,10 +185,6 @@ export default function (pi: ExtensionAPI): void {
       noFooter?: boolean;
     },
   ): Promise<string | undefined> {
-    if (transport !== "slack") {
-      throw new Error(`Unsupported transport: ${transport}`);
-    }
-
     const slack = getSlackClient();
     if (!slack) return undefined;
 
@@ -208,7 +200,7 @@ export default function (pi: ExtensionAPI): void {
   }
 
   async function sendRemoteText(message: ExternalMessage, text: string): Promise<void> {
-    await sendToRemoteChat(message.chatId, message.transport, text, {
+    await sendToRemoteChat(message.chatId, text, {
       threadId: message.threadId,
     });
   }
@@ -221,9 +213,7 @@ export default function (pi: ExtensionAPI): void {
     if (!remoteChat || !ownsBridgeConnection()) {
       throw new Error("No active remote chat is available for file upload");
     }
-    if (remoteChat.transport !== "slack") {
-      throw new Error("File upload is currently only supported for Slack chats");
-    }
+
 
     const filePath = path.isAbsolute(filePathInput)
       ? filePathInput
@@ -256,7 +246,7 @@ export default function (pi: ExtensionAPI): void {
   // ── Replay / handover ────────────────────────────────────────────────────
 
   async function replayAllAssistantMessagesToSlackThread(remoteChat: PendingRemoteChat): Promise<void> {
-    if (remoteChat.transport !== "slack" || !remoteChat.threadId) {
+    if (!remoteChat.threadId) {
       return;
     }
 
@@ -279,7 +269,7 @@ export default function (pi: ExtensionAPI): void {
       const text = entry.role === "user"
         ? `🗣️ **User:** ${entry.text}`
         : entry.text;
-      await sendToRemoteChat(remoteChat.chatId, "slack", text, {
+      await sendToRemoteChat(remoteChat.chatId, text, {
         threadId: remoteChat.threadId,
       });
     }
@@ -294,7 +284,7 @@ export default function (pi: ExtensionAPI): void {
   }
 
   async function notifySlackSessionHandover(reason?: "user-request" | "active-session"): Promise<void> {
-    const slackChats = auth.getNotificationChatIds("slack");
+    const slackChats = auth.getNotificationChatIds();
     if (slackChats.length === 0) return;
 
     const handoverMessage = [
@@ -308,7 +298,7 @@ export default function (pi: ExtensionAPI): void {
     void (async () => {
       for (const chatId of slackChats) {
         try {
-          const threadTs = await sendToRemoteChat(chatId, "slack", handoverMessage, {
+          const threadTs = await sendToRemoteChat(chatId, handoverMessage, {
             forceTopLevel: true,
           });
 
@@ -316,7 +306,7 @@ export default function (pi: ExtensionAPI): void {
             const text = entry.role === "user"
               ? `🗣️ **User:** ${entry.text}`
               : entry.text;
-            await sendToRemoteChat(chatId, "slack", text, { threadId: threadTs });
+            await sendToRemoteChat(chatId, text, { threadId: threadTs });
           }
 
           if (threadTs && conversation.length > 0) {
@@ -343,7 +333,6 @@ export default function (pi: ExtensionAPI): void {
     notifySlackHandover?: boolean;
     handoverReason?: "user-request" | "active-session";
   }): Promise<boolean> {
-    await transportInitialization;
 
     const config = loadConfig();
     if ((options?.respectAutoConnect ?? false) && config.autoConnect === false) {
@@ -433,7 +422,7 @@ export default function (pi: ExtensionAPI): void {
     pendingRemoteChat = toPendingRemoteChat(message);
     const explicitSwitchCommand = isExplicitRemoteSwitchCommand(message);
 
-    if (message.transport === "slack" && message.threadId && !explicitSwitchCommand) {
+    if (message.threadId && !explicitSwitchCommand) {
       rememberSlackThreadForSession(message.chatId, message.threadId, undefined, getCurrentSessionFile);
     }
     if (ctx.isIdle()) {
@@ -487,7 +476,7 @@ export default function (pi: ExtensionAPI): void {
   }
 
   async function maybeRouteSlackMessageToMappedSession(message: ExternalMessage): Promise<boolean> {
-    if (message.transport !== "slack" || message.isGroupChat || !message.threadId) {
+    if (message.isGroupChat || !message.threadId) {
       return false;
     }
 
@@ -519,7 +508,7 @@ export default function (pi: ExtensionAPI): void {
     }
 
     const explicitSwitchCommand = isExplicitRemoteSwitchCommand(message);
-    if (message.transport === "slack" && message.threadId && !explicitSwitchCommand) {
+    if (message.threadId && !explicitSwitchCommand) {
       rememberSlackThreadForSession(message.chatId, message.threadId, undefined, getCurrentSessionFile);
     }
 
@@ -533,7 +522,7 @@ export default function (pi: ExtensionAPI): void {
 
     pendingRemoteChat = toPendingRemoteChat(message);
     await setSlackWorkingReaction(pendingRemoteChat);
-    const taggedMessage = `[📱 @${message.username} via ${message.transport}]: ${message.content}`;
+    const taggedMessage = `[📱 @${message.username} via Slack]: ${message.content}`;
     if (ctx.isIdle()) {
       pi.sendUserMessage(taggedMessage);
     } else {
@@ -547,7 +536,7 @@ export default function (pi: ExtensionAPI): void {
     const trimmed = message.content.trim();
     const lowered = trimmed.toLowerCase();
 
-    if (message.transport === "slack" && lowered === "stop") {
+    if (lowered === "stop") {
       if (ctx.isIdle()) {
         await sendRemoteText(message, "Nothing is currently running.");
       } else {
@@ -618,7 +607,6 @@ export default function (pi: ExtensionAPI): void {
           await sendRemoteText(message, buildBridgeStatusText(
             slackIsConnected(),
             stats.trustedUsers,
-            stats.usersByTransport,
             stats.channels,
           ));
           return true;
@@ -745,7 +733,6 @@ export default function (pi: ExtensionAPI): void {
       return {
         content: [{ type: "text", text: `Uploaded ${path.basename(filePath)} to the current Slack chat.` }],
         details: {
-          transport: "slack",
           chatId: pendingRemoteChat?.chatId,
           path: filePath,
         },
@@ -785,7 +772,7 @@ export default function (pi: ExtensionAPI): void {
         ctx.ui.notify(message, level);
       },
       async (_chatId, _message) => {
-        // Challenge notifications are sent via the transport's sendMessage
+        // Challenge notifications are sent via the Slack client's sendMessage
       },
       saveAuthState,
     );
@@ -795,33 +782,24 @@ export default function (pi: ExtensionAPI): void {
     }
 
     // Initialize Slack client in the background (non-blocking)
-    transportInitialization = (async () => {
-      if (config.slack?.botToken && config.slack?.appToken) {
-        slackClient = new SlackClient(config.slack, auth);
-      }
+    if (config.slack?.botToken && config.slack?.appToken) {
+      slackClient = new SlackClient(config.slack, auth);
+    }
 
-      // Auto-connect if configured
-      if (slackClient && config.autoConnect !== false) {
-        if (!acquireLock()) {
-          ctx.ui.notify("ℹ️ slk-bridge: another instance is already connected — skipping auto-connect", "info");
-        } else {
-          try {
-            await slackClient.connect();
-            updateWidget();
-          } catch (err) {
-            releaseLock();
-            ctx.ui.notify(`⚠️ Slack connection failed: ${(err as Error).message}`, "warning");
-          }
+    // Auto-connect if configured
+    if (slackClient && config.autoConnect !== false) {
+      if (!acquireLock()) {
+        ctx.ui.notify("ℹ️ slk-bridge: another instance is already connected — skipping auto-connect", "info");
+      } else {
+        try {
+          await slackClient.connect();
+          updateWidget();
+        } catch (err) {
+          releaseLock();
+          ctx.ui.notify(`⚠️ Slack connection failed: ${(err as Error).message}`, "warning");
         }
       }
-    })().catch((err) => {
-      throw err;
-    });
-
-    void transportInitialization.catch((err) => {
-      console.error("Slack initialization error:", err);
-      ctx.ui.notify(`❌ Slack initialization failed: ${(err as Error).message}`, "error");
-    });
+    }
 
     // Wire Slack client message handler inside session_start (ctx is available)
     if (slackClient) {
@@ -930,7 +908,6 @@ export default function (pi: ExtensionAPI): void {
       if (!turnAccumulator) {
         turnAccumulator = {
           chatId: pendingRemoteChat.chatId,
-          transport: pendingRemoteChat.transport,
           entries: [],
           threadId: pendingRemoteChat.threadId,
         };
@@ -964,7 +941,6 @@ export default function (pi: ExtensionAPI): void {
         const entry = turnAccumulator.entries[ei];
         const resolvedThreadId = await sendToRemoteChat(
           turnAccumulator.chatId,
-          turnAccumulator.transport,
           entry,
           {
             threadId: turnAccumulator.threadId,
@@ -1041,7 +1017,7 @@ export default function (pi: ExtensionAPI): void {
         case "status": {
           const stats = auth.getStats();
           context.ui.notify(
-            buildBridgeStatusText(slackIsConnected(), stats.trustedUsers, stats.usersByTransport, stats.channels),
+            buildBridgeStatusText(slackIsConnected(), stats.trustedUsers, stats.channels),
             "info",
           );
           break;
@@ -1174,7 +1150,7 @@ export default function (pi: ExtensionAPI): void {
         }
 
         case "releaseclaim": {
-          const removed = auth.releaseClaim("slack");
+          const removed = auth.releaseClaim();
           context.ui.notify(
             `🔓 Re-opened Slack claim${removed > 0 ? ` (removed ${removed} trusted user${removed === 1 ? "" : "s"})` : ""}`,
             "info",

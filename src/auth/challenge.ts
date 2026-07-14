@@ -1,6 +1,5 @@
 /**
- * Challenge-based authentication for remote messengers
- * Ported from vscode-chonky-remote-pilot
+ * Challenge-based authentication for Slack bridge users
  */
 
 import { loadConfig, saveConfig } from "../config/index.js";
@@ -27,8 +26,8 @@ export class ChallengeAuth {
   private trustedUsers = new Set<string>();
   private channelAuth = new Map<string, ChannelAuth>();
   private blockedUsers = new Map<string, number>(); // userId -> unblock timestamp
-  private userChats = new Map<string, string>(); // namespaced userId -> DM chatId
-  private claimOpenByTransport = new Map<string, boolean>();
+  private userChats = new Map<string, string>(); // userId -> DM chatId
+  private claimOpen = true;
   private adminUserId?: string;
 
   constructor(
@@ -46,7 +45,7 @@ export class ChallengeAuth {
     adminUserId?: string;
     channels?: Record<string, { enabled: boolean; mode: "all" | "mentions" | "trusted-only" }>;
     userChats?: Record<string, string>;
-    claimOpenByTransport?: Record<string, boolean>;
+    claimOpen?: boolean;
   }): void {
     if (config.trustedUsers) {
       this.trustedUsers = new Set(config.trustedUsers);
@@ -60,8 +59,8 @@ export class ChallengeAuth {
     if (config.userChats) {
       this.userChats = new Map(Object.entries(config.userChats));
     }
-    if (config.claimOpenByTransport) {
-      this.claimOpenByTransport = new Map(Object.entries(config.claimOpenByTransport));
+    if (config.claimOpen !== undefined) {
+      this.claimOpen = config.claimOpen;
     }
   }
 
@@ -73,14 +72,14 @@ export class ChallengeAuth {
     adminUserId?: string;
     channels: Record<string, { enabled: boolean; mode: "all" | "mentions" | "trusted-only" }>;
     userChats: Record<string, string>;
-    claimOpenByTransport: Record<string, boolean>;
+    claimOpen: boolean;
   } {
     return {
       trustedUsers: Array.from(this.trustedUsers),
       adminUserId: this.adminUserId,
       channels: Object.fromEntries(this.channelAuth),
       userChats: Object.fromEntries(this.userChats),
-      claimOpenByTransport: Object.fromEntries(this.claimOpenByTransport),
+      claimOpen: this.claimOpen,
     };
   }
 
@@ -94,11 +93,9 @@ export class ChallengeAuth {
     username: string,
     isGroupChat: boolean,
     wasMentioned: boolean,
-    sendMessage?: (chatId: string, message: string) => Promise<void>,
-    transport?: string
+    sendMessage?: (chatId: string, message: string) => Promise<void>
   ): Promise<boolean> {
-    // Create namespaced user ID (transport:userId)
-    const namespacedUserId = transport ? `${transport}:${userId}` : userId;
+    const namespacedUserId = userId;
     
     // Check if user is blocked
     const blockedUntil = this.blockedUsers.get(namespacedUserId);
@@ -121,7 +118,7 @@ export class ChallengeAuth {
         return true;
       }
 
-      if (transport && !this.isClaimOpen(transport)) {
+      if (!this.claimOpen) {
         return false;
       }
 
@@ -219,11 +216,9 @@ export class ChallengeAuth {
     text: string,
     _chatId: string,
     userId: string,
-    sendMessage: (text: string) => Promise<void>,
-    transport?: string
+    sendMessage: (text: string) => Promise<void>
   ): Promise<boolean> {
-    // Create namespaced user ID
-    const namespacedUserId = transport ? `${transport}:${userId}` : userId;
+    const namespacedUserId = userId;
     
     // Non-admin users: check for challenge code entry
     if (!this.trustedUsers.has(namespacedUserId)) {
@@ -281,8 +276,7 @@ export class ChallengeAuth {
       case "/trusted": {
         const trusted = Array.from(this.trustedUsers)
           .map(id => {
-            const [transport, uid] = id.split(':');
-            return uid ? `${uid} (${transport})` : id;
+            return id;
           })
           .join(", ");
         await sendMessage(`Trusted users (${this.trustedUsers.size}):\n${trusted || "None"}`);
@@ -300,7 +294,7 @@ export class ChallengeAuth {
 
       case "/revoke": {
         if (parts.length < 2) {
-          await sendMessage("Usage: /revoke <userId> or /revoke <transport:userId>");
+          await sendMessage("Usage: /revoke <userId>");
           return true;
         }
         const revokeId = parts[1];
@@ -313,13 +307,10 @@ export class ChallengeAuth {
             revoked = true;
           }
         } else {
-          // Plain ID - search across all transports
-          for (const id of this.trustedUsers) {
-            if (id.endsWith(`:${revokeId}`)) {
-              this.trustedUsers.delete(id);
-              revoked = true;
-              break;
-            }
+          // Direct ID match
+          if (this.trustedUsers.has(revokeId)) {
+            this.trustedUsers.delete(revokeId);
+            revoked = true;
           }
         }
         if (revoked) {
@@ -359,10 +350,7 @@ export class ChallengeAuth {
     if (code === challenge.code) {
       this.trustedUsers.add(userId);
       this.rememberUserChat(userId, challenge.chatId);
-      const [transport] = userId.split(":");
-      if (transport) {
-        this.claimOpenByTransport.set(transport, false);
-      }
+      this.claimOpen = false;
       this.challenges.delete(userId);
       if (this.onSaveAuth) this.onSaveAuth();
       await sendMessage("✅ Authenticated! You can now chat with the agent.");
@@ -399,27 +387,13 @@ export class ChallengeAuth {
     if (this.onSaveAuth) this.onSaveAuth();
   }
 
-  private hasTrustedUserForTransport(transport: string): boolean {
-    for (const userId of this.trustedUsers) {
-      if (userId.startsWith(`${transport}:`)) {
-        return true;
-      }
-    }
-    return false;
+  isClaimOpen(): boolean {
+    return this.claimOpen;
   }
 
-  isClaimOpen(transport: string): boolean {
-    const explicit = this.claimOpenByTransport.get(transport);
-    if (explicit !== undefined) {
-      return explicit;
-    }
-    return !this.hasTrustedUserForTransport(transport);
-  }
-
-  releaseClaim(transport: string): number {
+  releaseClaim(): number {
     let removed = 0;
     for (const userId of Array.from(this.trustedUsers)) {
-      if (!userId.startsWith(`${transport}:`)) continue;
       this.trustedUsers.delete(userId);
       this.userChats.delete(userId);
       this.challenges.delete(userId);
@@ -427,17 +401,14 @@ export class ChallengeAuth {
       removed++;
     }
 
-    if (this.adminUserId?.startsWith(`${transport}:`)) {
-      this.adminUserId = undefined;
-    }
-
-    this.claimOpenByTransport.set(transport, true);
+    this.adminUserId = undefined;
+    this.claimOpen = true;
     if (this.onSaveAuth) this.onSaveAuth();
     return removed;
   }
 
-  getNotificationChatIds(transport: string): string[] {
-    if (this.adminUserId?.startsWith(`${transport}:`)) {
+  getNotificationChatIds(): string[] {
+    if (this.adminUserId) {
       const adminChatId = this.userChats.get(this.adminUserId);
       if (adminChatId) {
         return [adminChatId];
@@ -446,7 +417,6 @@ export class ChallengeAuth {
 
     const chatIds = new Set<string>();
     for (const userId of this.trustedUsers) {
-      if (!userId.startsWith(`${transport}:`)) continue;
       const chatId = this.userChats.get(userId);
       if (chatId) {
         chatIds.add(chatId);
@@ -474,7 +444,7 @@ export class ChallengeAuth {
 *Authentication:*
 • First DM to bot → 6-digit code shown in terminal
 • Enter code in chat → become trusted
-• After first auth on a transport, new DM claims stay closed until released locally
+• After first auth, new DM claims stay closed until released locally via \`/slk-bridge releaseclaim\`
 • First trusted user = admin`;
   }
 
@@ -484,24 +454,10 @@ export class ChallengeAuth {
   getStats(): { 
     trustedUsers: number; 
     channels: number;
-    usersByTransport: Record<string, string[]>;
   } {
-    // Group users by transport
-    const usersByTransport: Record<string, string[]> = {};
-    for (const namespacedId of this.trustedUsers) {
-      const [transport, userId] = namespacedId.split(':');
-      if (transport && userId) {
-        if (!usersByTransport[transport]) {
-          usersByTransport[transport] = [];
-        }
-        usersByTransport[transport].push(userId);
-      }
-    }
-    
     return {
       trustedUsers: this.trustedUsers.size,
       channels: Array.from(this.channelAuth.values()).filter((a) => a.enabled).length,
-      usersByTransport,
     };
   }
 }

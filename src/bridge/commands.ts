@@ -7,29 +7,18 @@
 export function buildBridgeStatusText(
   slackConnected: boolean,
   trustedUsers: number,
-  usersByTransport: Record<string, string[]>,
   channels: number,
 ): string {
   const lines = [
     "━━━ Slack Bridge Status ━━━",
     "",
-    "Transport:",
-    `  ${slackConnected ? "●" : "○"} slack`,
+    `  ${slackConnected ? "●" : "○"} Slack`,
     "",
     `Trusted Users: ${trustedUsers}`,
+    `Channels: ${channels}`,
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━",
   ];
 
-  if (trustedUsers > 0) {
-    for (const [transport, userIds] of Object.entries(usersByTransport)) {
-      if (userIds.length > 0) {
-        lines.push(`  └─ ${transport}: ${userIds.join(", ")}`);
-      }
-    }
-  }
-
-  lines.push("");
-  lines.push(`Channels: ${channels}`);
-  lines.push("━━━━━━━━━━━━━━━━━━━━━━━━━━━");
   return lines.join("\n");
 }
 

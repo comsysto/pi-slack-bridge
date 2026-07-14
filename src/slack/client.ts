@@ -36,7 +36,7 @@ async function loadSlackBolt() {
 }
 
 /**
- * Slack transport provider using @slack/bolt
+ * Slack client using @slack/bolt via Socket Mode
  */
 export class SlackClient {
   readonly type = "slack";
@@ -233,8 +233,7 @@ export class SlackClient {
         username,
         isGroupChat,
         wasMentioned,
-        sendMessageToUser,
-        this.type
+        sendMessageToUser
       );
 
       // Handle admin commands and challenge codes in DM
@@ -243,8 +242,7 @@ export class SlackClient {
           content,
           channelId,
           userId,
-          async (text) => await this.sendMessage(channelId, text),
-          this.type
+          async (text) => await this.sendMessage(channelId, text)
         );
         if (handled) {
           return;
@@ -259,7 +257,7 @@ export class SlackClient {
       if (this.messageHandler) {
         const externalMessage: ExternalMessage = {
           chatId: channelId,
-          transport: this.type,
+
           content,
           username: username,
           userId: userId,

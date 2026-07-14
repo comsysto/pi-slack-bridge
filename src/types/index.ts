@@ -8,8 +8,6 @@
 export interface ExternalMessage {
   /** Slack channel ID */
   chatId: string;
-  /** Transport type — always "slack" in this build */
-  transport: string;
   /** Message content/text */
   content: string;
   /** Sender username */
@@ -43,7 +41,7 @@ export interface SlackBridgeConfig {
     adminUserId?: string;
     channels?: Record<string, { enabled: boolean; mode: "all" | "mentions" | "trusted-only" }>;
     userChats?: Record<string, string>;
-    claimOpenByTransport?: Record<string, boolean>;
+    claimOpen?: boolean;
   };
   slackRouting?: {
     threadsByKey?: Record<string, { sessionPath: string; updatedAt: string }>;
@@ -63,7 +61,6 @@ export interface SlackBridgeConfig {
  */
 export interface PendingRemoteChat {
   chatId: string;
-  transport: string;
   username: string;
   messageId: string;
   threadId?: string;
@@ -71,10 +68,9 @@ export interface PendingRemoteChat {
 }
 
 /**
- * Transport connection status.
+ * Slack connection status.
  */
-export interface TransportStatus {
-  type: string;
+export interface ConnectionStatus {
   connected: boolean;
   error?: string;
 }
