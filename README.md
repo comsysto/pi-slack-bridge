@@ -10,6 +10,7 @@ Summarized featureset:
 - Upload/download files between Slack and pi
 - Manage multiple pi sessions per Slack thread (each session gets its own thread)
 - Switch between sessions, spawn new ones, and hand off seamlessly
+- Session message replay — when resuming a session, prior conversation history is replayed into the Slack thread
 - Opt sessions in/out of automatic bridge takeover
 
 Currently only one terminal session at a time can be bridged to Slack.
@@ -86,7 +87,7 @@ The user then enters the code in the bot chat to become a trusted user.
 
 ## Main deviations from pi-messenger-bridge
 
-### Slack as first-class citizen
+### Slack as first-class transport
 
 - **Change of semantics** - `msg-bridge` -> `slk-bridge` 
 - **File Upload and Receive** - send and receive Files over Slack to/from your Pi Agent session
