@@ -1,260 +1,196 @@
-# pi-messenger-bridge
+# pi-slack-bridge
 
-Bridge common messengers (Telegram, WhatsApp, Slack, Discord, Matrix) into pi.
+A **pi extension** that connects your [Pi agent harness](https://github.com/earendil-works/pi-coding-agent) terminal session to Slack via Socket Mode.
 
-Remote users can interact with your pi coding agent via their messenger app.
+This is a fork of [tintinweb/pi-messenger-bridge](https://github.com/tintinweb/pi-messenger-bridge) which purely focusses on the integration of Slack. It provides opinionated Quality-of-Life features like Markdown formatting via the [Slack Block Kit API](https://docs.slack.dev/reference/block-kit/blocks/markdown-block/), tmux-backed Session Management (create new or switch to former Pi Session) and more.
 
-<img width="887" height="656" alt="image" src="https://github.com/user-attachments/assets/d42a41e5-e7d5-420b-be8e-f2191facb190" />
+Summarized featureset:
+- Chat with pi from Slack — send messages, receive responses
+- Run deterministic remote commands (`/slk-bridge ...` in pi's terminal, `.bridge ...` in Slack DMs)
+- Upload/download files between Slack and pi
+- Manage multiple pi sessions per Slack thread (each session gets its own thread)
+- Switch between sessions, spawn new ones, and hand off seamlessly
+- Opt sessions in/out of automatic bridge takeover
 
-https://github.com/user-attachments/assets/cd64360e-e8cd-4820-a67f-bd127c5d6035
-
-## Features
-
-- 📱 Multi-messenger support (Telegram, WhatsApp, Slack, Discord, Matrix)
-- 🔐 Challenge-based authentication (6-digit codes)
-- 🎛️ Interactive menu (`/msg-bridge`) for setup and management
-- 🔒 Single-instance guard — prevents duplicate bot polling with sub-agents
-- 📊 Live status widget (toggleable)
-- 💾 Persistent config (auth state, auto-connect, widget preference)
-- 🔧 Tool call visibility for remote users
-- 📝 Multi-turn conversation support
-- 🔑 Secure permissions (chmod 600 for config files, 700 for directories)
+Currently only one terminal session at a time can be bridged to Slack.
 
 ## Setup
-
 ### 1. Install
 
 ```bash
-pi install npm:pi-messenger-bridge
+pi install npm:pi-slack-bridge
 ```
 
-### 2. Configure Transports
-
-#### Telegram
-
-Create a bot via [@BotFather](https://t.me/BotFather) and get your token.
+Or install from local path:
 
 ```bash
-/msg-bridge configure telegram <bot-token>
+pi install /path/to/pi-slack-bridge
 ```
 
-Or set via environment variable:
-```bash
-export PI_TELEGRAM_TOKEN="your-bot-token-here"
-```
+### 2. Configure Slack
 
-#### WhatsApp
+Create a Slack app with **Socket Mode** in `Settings > Socket Mode` enabled. You need both tokens:
 
-Configure WhatsApp (requires QR code scan):
+- **Bot Token** (`xoxb-...`) — in **Settings > Install App**
+- **App-Level Token** (`xapp-...`) — create one in **Settings > Basic Information > App-Level Tokens** with the `connections:write` scope
 
-```bash
-/msg-bridge configure whatsapp
-```
+In `Features > App Home` enable `Messages Tab` so you can interface with the App via DMs.
 
-Scan the QR code with your WhatsApp mobile app (**Linked Devices → Link a device**).
+Following Bot Token scopes (in `Features > OAuth & Permissions`) need to be enabled for the Slack Bridge to function fully:
 
-> **Note:** After linking, **send a message to your own phone number** in WhatsApp to activate the bridge.
+- `chat:write` - for exchanging Messages to/from Pi
+- `files:read` - for File sending to Pi
+- `files:write` - for File receiving from Pi
+- `im:history` - for viewing message history with Slack user
+- `im:read` - for saving metadata for session management
+- `reactions:write` - to show the User via ⏳ reaction that prompt is processing
+- `user:read` - to correctly identify user for authentication
 
-Or set custom auth path:
-```bash
-export PI_WHATSAPP_AUTH_PATH="/path/to/whatsapp-auth"
-```
-
-#### Slack
-
-Create a Slack app with Socket Mode enabled. You need both tokens:
+Configure the Slack Bridge via the interactive menu:
 
 ```bash
-/msg-bridge configure slack <bot-token> <app-token>
+/slk-bridge
+# Select "Configure"
+# Enter bot token
+# Enter app token
 ```
 
-Or set via environment variables:
-```bash
-export PI_SLACK_BOT_TOKEN="xoxb-..."
-export PI_SLACK_APP_TOKEN="xapp-..."
-```
-
-#### Discord
-
-1. Create a new application in the [Developer Portal](https://discord.com/developers/applications)
-2. Go to **Bot** → **Reset Token** → copy the token
-3. Enable **Message Content Intent** (under Privileged Gateway Intents on the same page)
-4. Go to **OAuth2 → URL Generator** → select scope `bot` → select permissions `Send Messages` and `Read Message History` → open the generated URL to invite the bot to your server
+Or via CLI:
 
 ```bash
-/msg-bridge configure discord <bot-token>
+/slk-bridge configure <bot-token> <app-token>
 ```
 
-Or set via environment variable:
-```bash
-export PI_DISCORD_TOKEN="your-bot-token"
-```
-
-#### Matrix
-
-Works with any Matrix homeserver — Element X, Element Web, FluffyChat, etc. The bot auto-joins rooms it's invited to.
-
-1. Register a bot account on your homeserver (or reuse an existing user)
-2. Get an access token: log in once via Element and copy from **Settings → Help & About → Advanced**, or POST to `/_matrix/client/v3/login`
-3. Note your homeserver URL (e.g. `https://matrix.org`)
+Or set environment variables:
 
 ```bash
-/msg-bridge configure matrix <homeserver-url> <access-token>
+export PI_SLACK_BOT_TOKEN="xoxb-your-slack-bot-token"
+export PI_SLACK_APP_TOKEN="xapp-your-slack-app-token"
 ```
-
-Or set via environment variables:
-```bash
-export PI_MATRIX_HOMESERVER="https://matrix.org"
-export PI_MATRIX_ACCESS_TOKEN="syt_..."
-```
-
-E2EE is **on by default**. Verify the bot's device once from another Matrix client (Element, etc.) — until verified, encrypted rooms can't be decrypted in either direction.
-
-Set `"encryption": false` in the `matrix` config to disable — useful for non-encrypted rooms only, or to bypass crypto-store/server desync (e.g. `M_UNKNOWN: One time key … already exists`). **Caveat:** with E2EE off, the homeserver sees plaintext, and the bot can't participate in encrypted rooms at all.
 
 ### 3. Connect
 
 ```bash
-/msg-bridge connect
+/slk-bridge connect
 ```
+
+The bridge automatically connects on next pi launch if `autoConnect` is set in the `~/.pi/slk-bridge.json`.
 
 ### 4. Authenticate Users
 
-When a user messages your bot for the first time, they'll receive a 6-digit challenge code.
-The code is displayed in your pi terminal. Share it with the user (e.g., via DM).
+When a Slack user messages the bot for the first time, they receive a 6-digit challenge code. The code appears in their pi terminal.
 
-The user enters the code in the bot chat to become a trusted user.
+The user then enters the code in the bot chat to become a trusted user.
 
-## Commands
+> After the first successful claim, unknown users are silently ignored. To re-open claiming: call `/slk-bridge releaseclaim` in a Pi terminal session
 
-| Command | Description |
-|---|---|
-| `/msg-bridge` | Open interactive menu (configure, connect, widget, help) |
-| `/msg-bridge status` | Show connection and user status |
-| `/msg-bridge connect` | Connect to all configured transports |
-| `/msg-bridge disconnect` | Disconnect all transports |
-| `/msg-bridge configure <platform> [token]` | Set transport credentials via CLI |
-| `/msg-bridge widget` | Toggle status widget on/off |
-| `/msg-bridge new <cwd>` | Start a fresh bridge session for a directory and retire older background sessions |
-| `/msg-bridge list-sessions [number]` | Show recent sessions (default 10) |
-| `/msg-bridge switch <number>` | Switch to one of all recent sessions |
-| `/msg-bridge sendfile <path>` | Upload a local file to current Slack chat |
-| `/msg-bridge releaseclaim [transport]` | Re-open claiming for a transport |
-| `/msg-bridge toggletools` | Toggle tool call visibility in remote messages |
-| `/msg-bridge help` | Show command reference |
-| `/msg-bridge optout` | Opt this session out of automatic bridge takeover |
-| `/msg-bridge optin` | Re-allow this session to take over the bridge |
-| `/msg-bridge optout list` | Show sessions opted out of takeover |
+## Main deviations from pi-messenger-bridge
 
-### Remote dot commands (in DM with the bot)
+### Slack as first-class citizen
 
-Trusted users can send lightweight remote commands directly in chat:
+- **Change of semantics** - `msg-bridge` -> `slk-bridge` 
+- **File Upload and Receive** - send and receive Files over Slack to/from your Pi Agent session
+- **Markdown Formatting** - Slack messages are now properly formatted with Markdown Blocks (see image below)
+- **stop** - send `stop` in Slack to abort an agent turn. Inspired by [badlogic/pi-telegram](https://github.com/badlogic/pi-telegram)
+- **Reflect pi status in Slack message footer** - each latest message has a Slack footer annotation which reflects the state of your Pi agent (current path, model, context window,...)
 
-| Command | Description |
-|---|---|
-| `.` | Show the remote command list |
-| `.bridge status` | Show bridge connection status |
-| `.bridge connect` | Connect the current session |
-| `.bridge disconnect` | Disconnect the current session |
-| `.bridge new <cwd>` | Start a fresh bridge session for a directory and clean up older background sessions |
-| `.bridge sendfile <path>` | Upload a local file to the current Slack chat |
-| `.skill <name> <args>` | Run a registered skill command |
-| `.prompt <name> <args>` | Run a registered prompt template |
+![markdown formatting screenshot](media/markdown-formatting.png)
 
-### Admin commands (in DM with the bot)
+### tmux-backed Session Management
 
-Trusted users can DM the bot directly to manage state. Reply with `/help` for the full list:
+The goal is to pick up your Pi session from Slack or from the terminal whenever you want.
+For this, `tmux` is used as the backbone to create new Pi sessions, switch to older ones or list previous ones.
+Only one `tmux` session can exist at time to function as a container for a newly created or switched-to Pi session.
 
-| Command | Description |
-|---|---|
-| `/help` | Show admin command reference |
-| `/trusted` | List trusted users |
-| `/revoke <userId>` | Revoke trust for a user |
-| `/channels` | List enabled channels |
-| `/enable <chatId> <all\|mentions\|trusted-only>` | Enable a channel |
-| `/disable <chatId>` | Disable a channel |
-| `/toggletools` | Toggle tool call visibility in replies |
+There are 3 main commands introduced:
 
-## Configuration
+- `/slk-bridge new [path]` - kill current Pi session and start a new one inside a tmux session. Include `path` as an argument to start the session in a path on your OS
+- `/slk-bridge list-sessions [number]` - list the recent 10 sessions of your Pi agent. Include `number` to list the last `number` sessions.
+- `/slk-bridge switch <number>` - switch to a session denoted by the number in the `list-sessions` command. The old tmux session (if it exists) gets used for switching the Pi terminal session.
 
-Config is stored at `~/.pi/msg-bridge.json` with secure permissions (chmod 600).
+Each command is implemented in a deterministic fashion inside the Pi Agent harness so that no LLM call is triggered.
+To optout/optin a local terminal session being bridged to Slack, use `/slk-bridge optout` or `/slk-bridge optin` respectively.
 
-Example config:
-```json
-{
-  "telegram": { "token": "..." },
-  "whatsapp": { "authPath": "..." },
-  "slack": { "botToken": "...", "appToken": "..." },
-  "discord": { "token": "..." },
-  "matrix": { "homeserverUrl": "https://matrix.org", "accessToken": "syt_...", "encryption": true },
-  "auth": {
-    "trustedUsers": ["telegram:123", "whatsapp:456"],
-    "adminUserId": "telegram:789"
-  },
-  "autoConnect": true,
-  "showWidget": true,
-  "debug": false,
-  "optedOutSessions": [
-    "/home/user/.pi/sessions/abc-session.jsonl"
-  ]
-}
-```
+Whenever a session is switched, it gets assigned its own new thread in the DM with the Slack App bridged to your Pi agent. A user can also switch to a session by continuing the respective thread in Slack.
 
-## Environment Variables
+### Deterministic Dot Commands
 
-Environment variables override file config:
+The user can use `.bridge` as a sort-of replacement to trigger some `/` commands to Pi. Currently only supports `skills` and `prompt templates` next to pi-slack-bridge native commands.
+To list all available commands, send `.` in Slack.
 
-- `PI_TELEGRAM_TOKEN` — Telegram bot token
-- `PI_WHATSAPP_AUTH_PATH` — WhatsApp session directory (default: `~/.pi/msg-bridge-whatsapp-auth`)
-- `PI_SLACK_BOT_TOKEN` — Slack bot token (xoxb-...)
-- `PI_SLACK_APP_TOKEN` — Slack app token (xapp-...)
-- `PI_DISCORD_TOKEN` — Discord bot token
-- `PI_MATRIX_HOMESERVER` — Matrix homeserver URL (e.g. `https://matrix.org`)
-- `PI_MATRIX_ACCESS_TOKEN` — Matrix access token
-- `MSG_BRIDGE_DEBUG` — Enable debug logging (true/false)
+![dot commands screenshot](media/dot-commands.png)
 
 ## Security
 
-- Config file: `~/.pi/msg-bridge.json` (chmod 600 - owner read/write only)
-- Config directory: `~/.pi/` (chmod 700 - owner only)
-- WhatsApp auth: `~/.pi/msg-bridge-whatsapp-auth/` (chmod 700 - owner only)
-- Environment variables take precedence over config file
-- Challenge-based authentication for all new users
+- Config file: `~/.pi/slk-bridge.json` (chmod 600 — owner read/write only)
+- Config directory: `~/.pi/` (chmod 700 — owner only)
+- Downloads: `~/.pi/slk-bridge-downloads/slack/`
+- Handoffs: `~/.pi/slk-bridge-handoffs/`
+- Environment variables take precedence over file config
+- Challenge-based authentication (6-digit code, 3 attempts, 2-minute expiry)
 - Transport-namespaced user IDs prevent impersonation
+- After first successful claim to the Slack app, unknown users are silently ignored until the user manually releases claim via `/slk-bridge releaseclaim`
 
 ## Troubleshooting
 
 Enable debug mode to see detailed logs:
 
-```json
-{
-  "debug": true
-}
-```
-
-Or:
 ```bash
-export MSG_BRIDGE_DEBUG=true
+export SLK_BRIDGE_DEBUG=true
 ```
 
-## Architecture
+Or set in config:
 
-Uses pi's native `sendUserMessage()` and `turn_end` events for two-way communication.
-No tool-loop hacks needed — this is the pi-native way.
+```json
+{ "debug": true }
+```
 
-Single-instance connection guard prevents duplicate polling when sub-agents spawn
-(global flag + PID lock file at `~/.pi/msg-bridge.lock`).
+### Common Issues
+
+- **"Another instance is connected"** — the single-instance guard prevents duplicate Slack connections. Use `/slk-bridge connect` in the active session or force-acquire by typing in the target session.
+- **No Slack messages received** — verify Socket Mode is enabled in your Slack app configuration and both tokens are correct.
+- **Handoff not working** — ensure tmux is installed and `pi` is in your PATH. Handoff spawns `pi --session <target>` in tmux.
 
 ## Development
 
 ```bash
+git clone https://github.com/tintinweb/pi-messenger-bridge.git
+cd pi-slack-bridge
 npm install
 npm run build        # compile TypeScript
 npm run typecheck    # type-check without emitting
-npm run test         # run tests
+npm run test         # run vitest suite
 npm run lint         # biome lint
 npm run lint:fix     # biome lint with auto-fix
 ```
+
+### Load directly from source (faster for development)
+
+```bash
+pi -e src/bridge/index.ts
+/slk-bridge connect
+```
+
+### Test suite
+
+```bash
+npm run test
+```
+
+Covers config loading, lock acquisition, Slack block splitting, conversation history extraction, and formatting.
+
+## Acknowledgements
+
+First of all, thanks to the tremendously useful Pi project by Earendil.
+
+Thanks to @tintinweb for providing the `pi-messenger-bridge` extension this builds upon.
+Furthermore thanks to @badlogic and @llblab for their `pi-telegram-bridge` implementations that inspired some features in this extension like Markdown formatting.
+
+Finally, thanks to @antirez for providing the `ds4` inference engine that enabled substantial development with a local `deepseek-v4-flash`.
+
+## Transparency about coding agent use
+
+This project used the Pi Agent Harness with the `gpt-5.4` model in the beginning to establish the Slack-only focus. Later, new features, refinements and refactors heavily took advantage of a locally hosted `deepseek-v4-flash` via [antirez/ds4](https://github.com/antirez/ds4) on a Macbook Pro M3 Max.
 
 ## License
 
