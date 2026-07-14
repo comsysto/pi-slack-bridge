@@ -679,15 +679,13 @@ export default function (pi: ExtensionAPI): void {
         case "replay": {
           const conversation = getConversationHistory(ctx.sessionManager);
           if (conversation.length === 0) {
-            await sendRemoteText(message, "No conversation history to replay.");
             return true;
           }
-          const threadTs = await sendToRemoteChat(message.chatId, "📋 **Conversation Replay**", {
+          const threadTs = await sendToRemoteChat(message.chatId, "🔄 **Session Replay**", {
             threadId: message.threadId,
             forceTopLevel: !message.threadId,
           });
           if (!threadTs) {
-            await sendRemoteText(message, "❌ Failed to start replay thread.");
             return true;
           }
           for (const entry of conversation) {
@@ -703,7 +701,6 @@ export default function (pi: ExtensionAPI): void {
             getCurrentSessionFile,
             () => getLastAssistantMessageInfo(ctx.sessionManager),
           );
-          await sendRemoteText(message, `✅ Replayed ${conversation.length} message${conversation.length === 1 ? "" : "s"} to thread.`);
           return true;
         }
         default:
