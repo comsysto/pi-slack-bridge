@@ -11,6 +11,7 @@
  *   session/lock.ts   — Single-instance connection guard (global flag + PID lock file)
  *   session/tmux.ts   — Tmux session spawning for fresh bridge sessions
  *   session/handlers.ts — Session-level helpers (conversation history, footer text, session listing)
+ *   session/replay.ts   — Message replay engine for session handoff
  *   auth/challenge.ts — Challenge-based user authentication
  *   config/index.ts   — File + env var config loading/saving
  *   types/index.ts    — Shared type definitions
