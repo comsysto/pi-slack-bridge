@@ -36,7 +36,7 @@ function getStatusLine(mctx: MenuContext): string {
     ? "  ● Connected"
     : "  ○ Disconnected";
 
-  return `${statusLine}\n  Trusted users: ${stats.trustedUsers}`;
+  return `${statusLine}\n  Trusted user: ${stats.trustedUser ?? "None"}`;
 }
 
 // ── Help ────────────────────────────────────────────────────────────────────

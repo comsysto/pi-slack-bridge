@@ -23,12 +23,11 @@ interface ChannelAuth {
  */
 export class ChallengeAuth {
   private challenges = new Map<string, ChallengeData>();
-  private trustedUsers = new Set<string>();
+  private trustedUser: string | undefined;
   private channelAuth = new Map<string, ChannelAuth>();
   private blockedUsers = new Map<string, number>(); // userId -> unblock timestamp
   private userChats = new Map<string, string>(); // userId -> DM chatId
   private claimOpen = true;
-  private adminUserId?: string;
 
   constructor(
     private onShowCode: (code: string, username: string) => void,
@@ -41,17 +40,13 @@ export class ChallengeAuth {
    * Initialize auth state from config
    */
   loadFromConfig(config: {
-    trustedUsers?: string[];
-    adminUserId?: string;
+    trustedUser?: string;
     channels?: Record<string, { enabled: boolean; mode: "all" | "mentions" | "trusted-only" }>;
     userChats?: Record<string, string>;
     claimOpen?: boolean;
   }): void {
-    if (config.trustedUsers) {
-      this.trustedUsers = new Set(config.trustedUsers);
-    }
-    if (config.adminUserId) {
-      this.adminUserId = config.adminUserId;
+    if (config.trustedUser) {
+      this.trustedUser = config.trustedUser;
     }
     if (config.channels) {
       this.channelAuth = new Map(Object.entries(config.channels));
@@ -68,15 +63,13 @@ export class ChallengeAuth {
    * Export auth state for config persistence
    */
   exportConfig(): {
-    trustedUsers: string[];
-    adminUserId?: string;
+    trustedUser?: string;
     channels: Record<string, { enabled: boolean; mode: "all" | "mentions" | "trusted-only" }>;
     userChats: Record<string, string>;
     claimOpen: boolean;
   } {
     return {
-      trustedUsers: Array.from(this.trustedUsers),
-      adminUserId: this.adminUserId,
+      trustedUser: this.trustedUser,
       channels: Object.fromEntries(this.channelAuth),
       userChats: Object.fromEntries(this.userChats),
       claimOpen: this.claimOpen,
@@ -108,13 +101,8 @@ export class ChallengeAuth {
 
     // DM: check trusted or initiate challenge
     if (!isGroupChat) {
-      if (this.trustedUsers.has(namespacedUserId)) {
+      if (this.trustedUser === namespacedUserId) {
         this.rememberUserChat(namespacedUserId, chatId);
-        // Set as admin if first trusted user
-        if (!this.adminUserId) {
-          this.adminUserId = namespacedUserId;
-          this.onNotify(`🔐 ${username} is now the admin`, "info");
-        }
         return true;
       }
 
@@ -149,7 +137,7 @@ export class ChallengeAuth {
       case "mentions":
         return wasMentioned || false;
       case "trusted-only":
-        return this.trustedUsers.has(namespacedUserId);
+        return this.trustedUser === namespacedUserId;
       default:
         return false;
     }
@@ -220,8 +208,8 @@ export class ChallengeAuth {
   ): Promise<boolean> {
     const namespacedUserId = userId;
     
-    // Non-admin users: check for challenge code entry
-    if (!this.trustedUsers.has(namespacedUserId)) {
+    // Non-trusted users: check for challenge code entry
+    if (this.trustedUser !== namespacedUserId) {
       const challenge = this.challenges.get(namespacedUserId);
       if (challenge && text.match(/^\d{6}$/)) {
         return await this.validateChallenge(namespacedUserId, text, sendMessage);
@@ -274,12 +262,7 @@ export class ChallengeAuth {
       }
 
       case "/trusted": {
-        const trusted = Array.from(this.trustedUsers)
-          .map(id => {
-            return id;
-          })
-          .join(", ");
-        await sendMessage(`Trusted users (${this.trustedUsers.size}):\n${trusted || "None"}`);
+        await sendMessage(`Trusted user: ${this.trustedUser ?? "None"}`);
         return true;
       }
 
@@ -293,32 +276,23 @@ export class ChallengeAuth {
       }
 
       case "/revoke": {
-        if (parts.length < 2) {
-          await sendMessage("Usage: /revoke <userId>");
+        if (!this.trustedUser) {
+          await sendMessage("❌ No trusted user to revoke");
           return true;
         }
         const revokeId = parts[1];
-        // Support both "telegram:123" and "123" (searches for any match)
-        let revoked = false;
-        if (revokeId.includes(':')) {
-          // Full namespaced ID
-          if (this.trustedUsers.has(revokeId)) {
-            this.trustedUsers.delete(revokeId);
-            revoked = true;
-          }
-        } else {
-          // Direct ID match
-          if (this.trustedUsers.has(revokeId)) {
-            this.trustedUsers.delete(revokeId);
-            revoked = true;
-          }
-        }
-        if (revoked) {
+        if (revokeId && (revokeId === this.trustedUser || revokeId === this.trustedUser.split(":")[1])) {
+          this.trustedUser = undefined;
           if (this.onSaveAuth) this.onSaveAuth();
-          await sendMessage(`🔓 Revoked trust for ${revokeId}`);
-          this.onNotify(`Revoked: ${revokeId}`, "warning");
+          await sendMessage(`🔓 Revoked trust for ${this.trustedUser}`);
+          this.onNotify(`Revoked: ${this.trustedUser}`, "warning");
+        } else if (!revokeId) {
+          this.trustedUser = undefined;
+          if (this.onSaveAuth) this.onSaveAuth();
+          await sendMessage("🔓 Revoked current trusted user");
+          this.onNotify("Revoked current trusted user", "warning");
         } else {
-          await sendMessage(`❌ User ${revokeId} not found in trusted users`);
+          await sendMessage(`❌ ${revokeId} is not the trusted user`);
         }
         return true;
       }
@@ -348,7 +322,7 @@ export class ChallengeAuth {
 
     // Correct code?
     if (code === challenge.code) {
-      this.trustedUsers.add(userId);
+      this.trustedUser = userId;
       this.rememberUserChat(userId, challenge.chatId);
       this.claimOpen = false;
       this.challenges.delete(userId);
@@ -392,49 +366,36 @@ export class ChallengeAuth {
   }
 
   releaseClaim(): number {
-    let removed = 0;
-    for (const userId of Array.from(this.trustedUsers)) {
-      this.trustedUsers.delete(userId);
-      this.userChats.delete(userId);
-      this.challenges.delete(userId);
-      this.blockedUsers.delete(userId);
-      removed++;
-    }
-
-    this.adminUserId = undefined;
+    const hadUser = this.trustedUser ? 1 : 0;
+    this.trustedUser = undefined;
+    this.userChats.clear();
+    this.challenges.clear();
+    this.blockedUsers.clear();
     this.claimOpen = true;
     if (this.onSaveAuth) this.onSaveAuth();
-    return removed;
+    return hadUser;
   }
 
   getNotificationChatIds(): string[] {
-    if (this.adminUserId) {
-      const adminChatId = this.userChats.get(this.adminUserId);
-      if (adminChatId) {
-        return [adminChatId];
-      }
-    }
-
-    const chatIds = new Set<string>();
-    for (const userId of this.trustedUsers) {
-      const chatId = this.userChats.get(userId);
+    if (this.trustedUser) {
+      const chatId = this.userChats.get(this.trustedUser);
       if (chatId) {
-        chatIds.add(chatId);
+        return [chatId];
       }
     }
-    return Array.from(chatIds);
+    return [];
   }
 
   /**
    * Get help text for admin commands
    */
   private getHelpText(): string {
-    return `**Admin Commands**
+    return `**Commands**
 
 *DM Only:*
 • \`/help\` — Show this help
-• \`/trusted\` — List trusted users
-• \`/revoke <userId>\` — Revoke trust for a user
+• \`/trusted\` — Show trusted user
+• \`/revoke\` — Revoke trust for current user
 • \`/channels\` — List enabled channels
 • \`/enable <chatId> <mode>\` — Enable a channel
   Modes: \`all\`, \`mentions\`, \`trusted-only\`
@@ -444,19 +405,18 @@ export class ChallengeAuth {
 *Authentication:*
 • First DM to bot → 6-digit code shown in terminal
 • Enter code in chat → become trusted
-• After first auth, new DM claims stay closed until released locally via \`/slk-bridge releaseclaim\`
-• First trusted user = admin`;
+• After first auth, new DM claims stay closed until released locally via \`/slk-bridge releaseclaim\``;
   }
 
   /**
    * Get current stats with detailed user info
    */
-  getStats(): { 
-    trustedUsers: number; 
+  getStats(): {
+    trustedUser: string | undefined;
     channels: number;
   } {
     return {
-      trustedUsers: this.trustedUsers.size,
+      trustedUser: this.trustedUser,
       channels: Array.from(this.channelAuth.values()).filter((a) => a.enabled).length,
     };
   }

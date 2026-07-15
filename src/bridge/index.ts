@@ -20,27 +20,21 @@
  *   ui/status-widget.ts — Status widget
  */
 
-import { execFile } from "node:child_process";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { Type } from "typebox";
 import { ChallengeAuth } from "../auth/challenge.js";
 import { loadConfig, saveConfig } from "../config/index.js";
-import { SlackClient } from "../slack/client.js";
 import {
-  extractTextFromMessage,
-  formatToolCalls,
-} from "../slack/formatting.js";
-import {
-  rememberSlackThreadForSession,
-  markLatestAssistantDeliveredToSlackThread,
-  hasLatestAssistantBeenDeliveredToSlackThread,
-  getSlackThreadOwnerSession,
-  getRememberedSlackThreadForCurrentSession,
-} from "../slack/routing.js";
+  buildSessionListText,
+  buildSlackFooterText,
+  getConversationHistory,
+  getLastAssistantMessageInfo,
+  listRecentSessions,
+} from "../session/handlers.js";
 import {
   acquireLock,
   forceAcquireLock,
@@ -49,27 +43,28 @@ import {
   isLockHeldLocally,
   releaseLock,
 } from "../session/lock.js";
-import {
-  buildSlackFooterText,
-  getConversationHistory,
-  getLastAssistantMessageInfo,
-  buildSessionListText,
-  listRecentSessions,
-} from "../session/handlers.js";
-import {
-  replayConversationToExistingThread,
-  replayConversationToNewThread,
-} from "../session/replay.js";
 import { buildTmuxConnectSummary, resolvePathInput, runTmuxPiConnect } from "../session/tmux.js";
+import { SlackClient } from "../slack/client.js";
 import {
-  buildBridgeStatusText,
-  buildRemoteCommandList,
-  buildBridgeHelpText,
-  getSlackHandoverReasonText,
-} from "./commands.js";
+  extractTextFromMessage,
+  formatToolCalls,
+} from "../slack/formatting.js";
+import {
+  getRememberedSlackThreadForCurrentSession,
+  getSlackThreadOwnerSession,
+  hasLatestAssistantBeenDeliveredToSlackThread,
+  markLatestAssistantDeliveredToSlackThread,
+  rememberSlackThreadForSession,
+} from "../slack/routing.js";
+import type { ExternalMessage, PendingRemoteChat } from "../types/index.js";
 import { openMainMenu } from "../ui/main-menu.js";
 import { createStatusWidget } from "../ui/status-widget.js";
-import type { ExternalMessage, PendingRemoteChat } from "../types/index.js";
+import {
+  buildBridgeHelpText,
+  buildBridgeStatusText,
+  buildRemoteCommandList,
+  getSlackHandoverReasonText,
+} from "./commands.js";
 
 export default function (pi: ExtensionAPI): void {
   let slackClient: SlackClient | null = null;
@@ -611,7 +606,7 @@ export default function (pi: ExtensionAPI): void {
           const stats = auth.getStats();
           await sendRemoteText(message, buildBridgeStatusText(
             slackIsConnected(),
-            stats.trustedUsers,
+            stats.trustedUser,
             stats.channels,
           ));
           return true;
@@ -1049,7 +1044,7 @@ export default function (pi: ExtensionAPI): void {
         case "status": {
           const stats = auth.getStats();
           context.ui.notify(
-            buildBridgeStatusText(slackIsConnected(), stats.trustedUsers, stats.channels),
+            buildBridgeStatusText(slackIsConnected(), stats.trustedUser, stats.channels),
             "info",
           );
           break;
