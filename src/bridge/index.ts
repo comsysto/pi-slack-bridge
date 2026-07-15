@@ -20,7 +20,6 @@
  *   ui/status-widget.ts — Status widget
  */
 
-import { execFile } from "node:child_process";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -56,10 +55,6 @@ import {
   buildSessionListText,
   listRecentSessions,
 } from "../session/handlers.js";
-import {
-  replayConversationToExistingThread,
-  replayConversationToNewThread,
-} from "../session/replay.js";
 import { buildTmuxConnectSummary, resolvePathInput, runTmuxPiConnect } from "../session/tmux.js";
 import {
   buildBridgeStatusText,
