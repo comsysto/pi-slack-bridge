@@ -6,7 +6,7 @@ Thank you for your interest in contributing!
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/thanhh/pi-slack-bridge.git
+   git clone https://github.com/comsysto/pi-slack-bridge.git
    cd pi-slack-bridge
    ```
 

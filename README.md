@@ -158,7 +158,7 @@ Or set in config:
 ## Development
 
 ```bash
-git clone https://github.com/tintinweb/pi-slack-bridge.git
+git clone https://github.com/comsysto/pi-slack-bridge.git
 cd pi-slack-bridge
 npm install
 npm run build        # compile TypeScript
@@ -187,10 +187,10 @@ Covers config loading, lock acquisition, Slack block splitting, conversation his
 
 First of all, thanks to the tremendously useful Pi project by Earendil.
 
-Thanks to @tintinweb for providing the `pi-messenger-bridge` extension this builds upon.
-Furthermore thanks to @badlogic and @llblab for their `pi-telegram-bridge` implementations that inspired some features in this extension like Markdown formatting.
+Thanks to [@tintinweb](https://github.com/tintinweb) for providing the `pi-messenger-bridge` extension this builds upon.
+Furthermore thanks to [@badlogic](https://github.com/badlogic) and [@llblab](https://github.com/llblab) for their `pi-telegram-bridge` implementations that inspired some features in this extension like Markdown formatting.
 
-Finally, thanks to @antirez for providing the `ds4` inference engine that enabled substantial development with a local `deepseek-v4-flash`.
+Finally, thanks to [@antirez](https://github.com/antirez) for providing the `ds4` inference engine that enabled substantial development with a local `deepseek-v4-flash`.
 
 ## Transparency about coding agent use
 
