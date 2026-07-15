@@ -41,7 +41,6 @@ function getStatusLine(mctx: MenuContext): string {
 
 // ── Help ────────────────────────────────────────────────────────────────────
 
-// FYI: resolved — renamed to /slk-bridge, configure no longer needs 'slack' argument
 function showHelp(mctx: MenuContext): void {
   mctx.ui.notify(
     "Subcommands:\n" +
@@ -49,10 +48,15 @@ function showHelp(mctx: MenuContext): void {
     "  /slk-bridge connect               — connect Slack\n" +
     "  /slk-bridge disconnect            — disconnect Slack\n" +
     "  /slk-bridge configure             — set up Slack bot token + app token\n" +
-    "  /slk-bridge widget                — toggle status widget\n" +
-    "  /slk-bridge list-sessions         — show up to 10 recent sessions\n" +
+    "  /slk-bridge toggletools           — toggle tool call visibility\n" +
+    "  /slk-bridge new [cwd]             — start a fresh bridge session\n" +
+    "  /slk-bridge list-sessions [n]     — show recent sessions (default 10)\n" +
     "  /slk-bridge switch <number>       — switch to a listed session\n" +
-    "  /slk-bridge sendfile <path>       — upload local file to current Slack chat",
+    "  /slk-bridge sendfile <path>       — upload local file to current Slack chat\n" +
+    "  /slk-bridge releaseclaim          — re-open claiming for Slack\n" +
+    "  /slk-bridge optout                — opt session out of bridge takeover\n" +
+    "  /slk-bridge optin                 — re-allow session to take over bridge\n" +
+    "  /slk-bridge optout list           — show sessions opted out of takeover",
     "info",
   );
 }
@@ -111,13 +115,12 @@ async function doConfigure(mctx: MenuContext): Promise<void> {
   mctx.updateWidget();
 }
 
-function doToggleWidget(mctx: MenuContext): void {
+function doToggleTools(mctx: MenuContext): void {
   const cfg = loadConfig();
-  cfg.showWidget = cfg.showWidget === false;
+  cfg.hideToolCalls = !cfg.hideToolCalls;
   saveConfig(cfg);
-  const state = cfg.showWidget !== false ? "shown" : "hidden";
-  mctx.ui.notify(`📊 Status widget ${state}`, "info");
-  mctx.updateWidget();
+  const state = cfg.hideToolCalls ? "hidden" : "shown";
+  mctx.ui.notify(`🔧 Tool calls ${state} in remote messages`, "info");
 }
 
 function doOptOut(mctx: MenuContext): void {
@@ -169,7 +172,7 @@ export async function openMainMenu(mctx: MenuContext): Promise<void> {
     const choices = [
       connected ? "Disconnect" : "Connect",
       "Configure",
-      "Widget",
+      "Toggle Tool Calls",
       "Opt out",
       "Opt in",
       "Help",
@@ -188,8 +191,8 @@ export async function openMainMenu(mctx: MenuContext): Promise<void> {
       case "Configure":
         await doConfigure(mctx);
         break;
-      case "Widget":
-        doToggleWidget(mctx);
+      case "Toggle Tool Calls":
+        doToggleTools(mctx);
         break;
       case "Opt out":
         doOptOut(mctx);

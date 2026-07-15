@@ -704,6 +704,14 @@ export default function (pi: ExtensionAPI): void {
           );
           return true;
         }
+        case "toggletools": {
+          const cfg = loadConfig();
+          cfg.hideToolCalls = !cfg.hideToolCalls;
+          saveConfig(cfg);
+          const state = cfg.hideToolCalls ? "hidden" : "shown";
+          await sendRemoteText(message, `🔧 Tool calls ${state} in remote messages`);
+          return true;
+        }
         default:
           await sendRemoteText(message, `Unknown bridge command: ${subcommand}`);
           return true;
