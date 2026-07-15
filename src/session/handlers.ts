@@ -6,9 +6,9 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import * as os from "os";
 import * as path from "path";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { truncate } from "../slack/formatting.js";
 
 const execFileAsync = promisify(execFile);
