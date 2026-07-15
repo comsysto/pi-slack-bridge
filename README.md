@@ -1,19 +1,24 @@
 # pi-slack-bridge
 
+![markdown formatting screenshot](media/markdown-formatting.png)
+
 A **pi extension** that connects your [Pi agent harness](https://github.com/earendil-works/pi-coding-agent) terminal session to Slack via Socket Mode.
 
 This is a fork of [tintinweb/pi-messenger-bridge](https://github.com/tintinweb/pi-messenger-bridge) which purely focusses on the integration of Slack. It provides opinionated Quality-of-Life features like Markdown formatting via the [Slack Block Kit API](https://docs.slack.dev/reference/block-kit/blocks/markdown-block/), tmux-backed Session Management (create new or switch to former Pi Session) and more.
 
 Summarized featureset:
-- Chat with pi from Slack — send messages, receive responses
+- Send messages, receive responses with pi from Slack
 - Run deterministic remote commands (`/slk-bridge ...` in pi's terminal, `.bridge ...` in Slack DMs)
 - Upload/download files between Slack and pi
 - Manage multiple pi sessions per Slack thread (each session gets its own thread)
 - Switch between sessions, spawn new ones, and hand off seamlessly
-- Session message replay — when resuming a session, prior conversation history is replayed into the Slack thread
+- Session message replay - when resuming a session, prior conversation history is replayed into the Slack thread
 - Opt sessions in/out of automatic bridge takeover
 
 Currently only one terminal session at a time can be bridged to Slack.
+
+
+
 
 ## Setup
 ### 1. Install
@@ -91,11 +96,9 @@ The user then enters the code in the bot chat to become a trusted user.
 
 - **Change of semantics** - `msg-bridge` -> `slk-bridge` 
 - **File Upload and Receive** - send and receive Files over Slack to/from your Pi Agent session
-- **Markdown Formatting** - Slack messages are now properly formatted with Markdown Blocks (see image below)
+- **Markdown Formatting** - Slack messages are now properly formatted with Markdown Blocks
 - **stop** - send `stop` in Slack to abort an agent turn. Inspired by [badlogic/pi-telegram](https://github.com/badlogic/pi-telegram)
 - **Reflect pi status in Slack message footer** - each latest message has a Slack footer annotation which reflects the state of your Pi agent (current path, model, context window,...)
-
-![markdown formatting screenshot](media/markdown-formatting.png)
 
 ### tmux-backed Session Management
 
@@ -105,8 +108,8 @@ Only one `tmux` session can exist at time to function as a container for a newly
 
 There are 3 main commands introduced:
 
-- `/slk-bridge new [path]` - kill current Pi session and start a new one inside a tmux session. Include `path` as an argument to start the session in a path on your OS
-- `/slk-bridge list-sessions [number]` - list the recent 10 sessions of your Pi agent. Include `number` to list the last `number` sessions.
+- `/slk-bridge new [path]` - kill current Pi session and start a new one inside a tmux session. Include `path` as an optional argument to start the session in a path on your OS
+- `/slk-bridge list-sessions [number]` - list the recent 10 sessions of your Pi agent. Include an optional `number` argument to list the last `number` sessions.
 - `/slk-bridge switch <number>` - switch to a session denoted by the number in the `list-sessions` command. The old tmux session (if it exists) gets used for switching the Pi terminal session.
 
 Each command is implemented in a deterministic fashion inside the Pi Agent harness so that no LLM call is triggered.
@@ -155,7 +158,7 @@ Or set in config:
 ## Development
 
 ```bash
-git clone https://github.com/tintinweb/pi-messenger-bridge.git
+git clone https://github.com/tintinweb/pi-slack-bridge.git
 cd pi-slack-bridge
 npm install
 npm run build        # compile TypeScript

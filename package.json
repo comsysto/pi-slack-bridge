@@ -35,12 +35,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/tintinweb/pi-messenger-bridge.git"
+    "url": "https://github.com/tintinweb/pi-slack-bridge.git"
   },
   "bugs": {
-    "url": "https://github.com/tintinweb/pi-messenger-bridge/issues"
+    "url": "https://github.com/tintinweb/pi-slack-bridge/issues"
   },
-  "homepage": "https://github.com/tintinweb/pi-messenger-bridge#readme",
+  "homepage": "https://github.com/tintinweb/pi-slack-bridge#readme",
   "engines": {
     "node": ">=18.0.0"
   },

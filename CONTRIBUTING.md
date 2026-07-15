@@ -1,6 +1,6 @@
 # Contributing to pi-slack-bridge
 
-Thank you for your interest in contributing! 🎉
+Thank you for your interest in contributing! 
 
 ## Development Setup
 
