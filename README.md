@@ -1,6 +1,6 @@
 # pi-slack-bridge
 
-![markdown formatting screenshot](media/markdown-formatting.png)
+![markdown formatting screenshot](media/markdown-formatting.png?)
 
 A **pi extension** that connects your [Pi agent harness](https://github.com/earendil-works/pi-coding-agent) terminal session to Slack via Socket Mode.
 
@@ -122,7 +122,7 @@ Whenever a session is switched, it gets assigned its own new thread in the DM wi
 The user can use `.bridge` as a sort-of replacement to trigger some `/` commands to Pi. Currently only supports `skills` and `prompt templates` next to pi-slack-bridge native commands.
 To list all available commands, send `.` in Slack.
 
-![dot commands screenshot](media/dot-commands.png)
+![dot commands screenshot](media/dot-commands.png?)
 
 ## Security
 
