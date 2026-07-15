@@ -1,7 +1,7 @@
 {
   "name": "pi-slack-bridge",
   "version": "0.1.0",
-  "description": "Bridge Slack into pi \u2014 a pure Slack remote control surface for the pi coding agent",
+  "description": "Bridge Slack into pi - a pure Slack remote control surface for the pi coding agent",
   "main": "dist/bridge/index.js",
   "types": "dist/bridge/index.d.ts",
   "pi": {
@@ -31,16 +31,16 @@
     "messaging",
     "coding-agent"
   ],
-  "author": "tintinweb",
+  "author": "thanhtientc",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/tintinweb/pi-slack-bridge.git"
+    "url": "https://github.com/comsysto/pi-slack-bridge.git"
   },
   "bugs": {
-    "url": "https://github.com/tintinweb/pi-slack-bridge/issues"
+    "url": "https://github.com/comsysto/pi-slack-bridge/issues"
   },
-  "homepage": "https://github.com/tintinweb/pi-slack-bridge#readme",
+  "homepage": "https://github.com/comsysto/pi-slack-bridge#readme",
   "engines": {
     "node": ">=18.0.0"
   },
