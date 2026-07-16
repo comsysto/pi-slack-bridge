@@ -4,6 +4,19 @@
 
 import { loadConfig, saveConfig } from "../config/index.js";
 
+/**
+ * Parse a trustedUser config value which can be:
+ *   - old format: "userId" (just a Slack user ID like U04H2K2QW5T)
+ *   - new format: "userId:username" (includes display name)
+ */
+function parseTrustedUser(value: string): { userId: string; username: string | undefined } {
+  const colon = value.indexOf(":");
+  if (colon > 0 && colon < value.length - 1) {
+    return { userId: value.slice(0, colon), username: value.slice(colon + 1) };
+  }
+  return { userId: value, username: undefined };
+}
+
 interface ChallengeData {
   code: string;
   userId: string;
@@ -23,7 +36,8 @@ interface ChannelAuth {
  */
 export class ChallengeAuth {
   private challenges = new Map<string, ChallengeData>();
-  private trustedUser: string | undefined;
+  private trustedUserId: string | undefined;
+  private trustedUsername: string | undefined;
   private channelAuth = new Map<string, ChannelAuth>();
   private blockedUsers = new Map<string, number>(); // userId -> unblock timestamp
   private userChats = new Map<string, string>(); // userId -> DM chatId
@@ -46,7 +60,9 @@ export class ChallengeAuth {
     claimOpen?: boolean;
   }): void {
     if (config.trustedUser) {
-      this.trustedUser = config.trustedUser;
+      const parsed = parseTrustedUser(config.trustedUser);
+      this.trustedUserId = parsed.userId;
+      this.trustedUsername = parsed.username;
     }
     if (config.channels) {
       this.channelAuth = new Map(Object.entries(config.channels));
@@ -69,7 +85,7 @@ export class ChallengeAuth {
     claimOpen: boolean;
   } {
     return {
-      trustedUser: this.trustedUser,
+      trustedUser: this.trustedUserId ? `${this.trustedUserId}:${this.trustedUsername}` : undefined,
       channels: Object.fromEntries(this.channelAuth),
       userChats: Object.fromEntries(this.userChats),
       claimOpen: this.claimOpen,
@@ -101,7 +117,7 @@ export class ChallengeAuth {
 
     // DM: check trusted or initiate challenge
     if (!isGroupChat) {
-      if (this.trustedUser === namespacedUserId) {
+      if (this.trustedUserId === namespacedUserId) {
         this.rememberUserChat(namespacedUserId, chatId);
         return true;
       }
@@ -137,7 +153,7 @@ export class ChallengeAuth {
       case "mentions":
         return wasMentioned || false;
       case "trusted-only":
-        return this.trustedUser === namespacedUserId;
+        return this.trustedUserId === namespacedUserId;
       default:
         return false;
     }
@@ -209,7 +225,7 @@ export class ChallengeAuth {
     const namespacedUserId = userId;
     
     // Non-trusted users: check for challenge code entry
-    if (this.trustedUser !== namespacedUserId) {
+    if (this.trustedUserId !== namespacedUserId) {
       const challenge = this.challenges.get(namespacedUserId);
       if (challenge && text.match(/^\d{6}$/)) {
         return await this.validateChallenge(namespacedUserId, text, sendMessage);
@@ -262,7 +278,7 @@ export class ChallengeAuth {
       }
 
       case "/trusted": {
-        await sendMessage(`Trusted user: ${this.trustedUser ?? "None"}`);
+        await sendMessage(`Trusted user: ${this.trustedUsername ?? this.trustedUserId ?? "None"}`);
         return true;
       }
 
@@ -276,18 +292,21 @@ export class ChallengeAuth {
       }
 
       case "/revoke": {
-        if (!this.trustedUser) {
+        if (!this.trustedUserId) {
           await sendMessage("❌ No trusted user to revoke");
           return true;
         }
         const revokeId = parts[1];
-        if (revokeId && (revokeId === this.trustedUser || revokeId === this.trustedUser.split(":")[1])) {
-          this.trustedUser = undefined;
+        const revokedUsername = this.trustedUsername ?? this.trustedUserId;
+        if (revokeId && (revokeId === this.trustedUserId || revokeId === this.trustedUsername)) {
+          this.trustedUserId = undefined;
+          this.trustedUsername = undefined;
           if (this.onSaveAuth) this.onSaveAuth();
-          await sendMessage(`🔓 Revoked trust for ${this.trustedUser}`);
-          this.onNotify(`Revoked: ${this.trustedUser}`, "warning");
+          await sendMessage(`🔓 Revoked trust for ${revokedUsername}`);
+          this.onNotify(`Revoked: ${revokedUsername}`, "warning");
         } else if (!revokeId) {
-          this.trustedUser = undefined;
+          this.trustedUserId = undefined;
+          this.trustedUsername = undefined;
           if (this.onSaveAuth) this.onSaveAuth();
           await sendMessage("🔓 Revoked current trusted user");
           this.onNotify("Revoked current trusted user", "warning");
@@ -322,7 +341,8 @@ export class ChallengeAuth {
 
     // Correct code?
     if (code === challenge.code) {
-      this.trustedUser = userId;
+      this.trustedUserId = userId;
+      this.trustedUsername = challenge.username;
       this.rememberUserChat(userId, challenge.chatId);
       this.claimOpen = false;
       this.challenges.delete(userId);
@@ -366,8 +386,9 @@ export class ChallengeAuth {
   }
 
   releaseClaim(): number {
-    const hadUser = this.trustedUser ? 1 : 0;
-    this.trustedUser = undefined;
+    const hadUser = this.trustedUserId ? 1 : 0;
+    this.trustedUserId = undefined;
+    this.trustedUsername = undefined;
     this.userChats.clear();
     this.challenges.clear();
     this.blockedUsers.clear();
@@ -377,8 +398,8 @@ export class ChallengeAuth {
   }
 
   getNotificationChatIds(): string[] {
-    if (this.trustedUser) {
-      const chatId = this.userChats.get(this.trustedUser);
+    if (this.trustedUserId) {
+      const chatId = this.userChats.get(this.trustedUserId);
       if (chatId) {
         return [chatId];
       }
@@ -416,7 +437,7 @@ export class ChallengeAuth {
     channels: number;
   } {
     return {
-      trustedUser: this.trustedUser,
+      trustedUser: this.trustedUsername ?? this.trustedUserId,
       channels: Array.from(this.channelAuth.values()).filter((a) => a.enabled).length,
     };
   }
