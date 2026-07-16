@@ -251,8 +251,6 @@ function splitTokenToFit(token: MarkdownToken, maxLen: number): MarkdownToken[] 
       return splitLineGroupedToken(token, maxLen, extractQuoteParagraphs, "quote");
     case "code":
       return splitCodeToken(token, maxLen);
-    case "heading":
-    case "hr":
     default:
       return splitRawToken(token, maxLen);
   }

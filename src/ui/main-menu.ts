@@ -31,12 +31,14 @@ export interface MenuContext {
 function getStatusLine(mctx: MenuContext): string {
   const connected = mctx.slackClient?.isConnected ?? false;
   const stats = mctx.auth.getStats();
+  const cfg = loadConfig();
 
   const statusLine = connected
     ? "  ● Connected"
     : "  ○ Disconnected";
 
-  return `${statusLine}\n  Trusted users: ${stats.trustedUsers}`;
+  const autoConnect = cfg.autoConnect !== false ? "on" : "off";
+  return `${statusLine}\n  Trusted users: ${stats.trustedUsers}\n  Auto-connect: ${autoConnect}`;
 }
 
 // ── Help ────────────────────────────────────────────────────────────────────
@@ -50,6 +52,7 @@ function showHelp(mctx: MenuContext): void {
     "  /slk-bridge disconnect            — disconnect Slack\n" +
     "  /slk-bridge configure             — set up Slack bot token + app token\n" +
     "  /slk-bridge widget                — toggle status widget\n" +
+    "  /slk-bridge autoconnect           — toggle auto-connect on session switch\n" +
     "  /slk-bridge list-sessions         — show up to 10 recent sessions\n" +
     "  /slk-bridge switch <number>       — switch to a listed session\n" +
     "  /slk-bridge sendfile <path>       — upload local file to current Slack chat",
@@ -120,6 +123,14 @@ function doToggleWidget(mctx: MenuContext): void {
   mctx.updateWidget();
 }
 
+function doToggleAutoConnect(mctx: MenuContext): void {
+  const cfg = loadConfig();
+  cfg.autoConnect = cfg.autoConnect === false;
+  saveConfig(cfg);
+  const state = cfg.autoConnect !== false ? "on" : "off";
+  mctx.ui.notify(`🔌 Auto-connect ${state}`, "info");
+}
+
 function doOptOut(mctx: MenuContext): void {
   const sessionFile = mctx.getCurrentSessionFile?.();
   if (!sessionFile) {
@@ -170,6 +181,7 @@ export async function openMainMenu(mctx: MenuContext): Promise<void> {
       connected ? "Disconnect" : "Connect",
       "Configure",
       "Widget",
+      "Toggle Auto Connect",
       "Opt out",
       "Opt in",
       "Help",
@@ -190,6 +202,9 @@ export async function openMainMenu(mctx: MenuContext): Promise<void> {
         break;
       case "Widget":
         doToggleWidget(mctx);
+        break;
+      case "Toggle Auto Connect":
+        doToggleAutoConnect(mctx);
         break;
       case "Opt out":
         doOptOut(mctx);

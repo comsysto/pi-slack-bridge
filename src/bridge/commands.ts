@@ -86,6 +86,7 @@ export function buildBridgeHelpText(): string {
     "/slk-bridge configure <bot-token> <app-token>",
     "                              Configure Slack bot",
     "/slk-bridge widget            Toggle status widget on/off",
+    "/slk-bridge autoconnect       Toggle auto-connect on session switch",
     "/slk-bridge new [cwd]         Start a fresh bridge session for current or specified directory",
     "/slk-bridge list-sessions [number]  Show recent sessions (default 10)",
     "/slk-bridge switch <number>   Switch to one of all recent sessions",
