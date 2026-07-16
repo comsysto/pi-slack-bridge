@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-16
+
 ### Added
 - **Session replay module** — extracted reusable replay logic into `src/session/replay.ts`; `.bridge replay` command replays full conversation history into Slack thread
 - **Toggle Tool Calls** — `/slk-bridge toggletools` and `.bridge toggletools` to hide/show tool call summaries in remote messages; replaces the old Widget toggle in the main menu
@@ -59,5 +61,6 @@
 - Context window token formatting consistent with pi TUI footer
 - Remaining `msg-bridge` references renamed across all source files
 
-[unreleased]: https://github.com/comsysto/pi-slack-bridge/compare/v0.1.0...HEAD
+[unreleased]: https://github.com/comsysto/pi-slack-bridge/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/comsysto/pi-slack-bridge/releases/tag/v0.2.0
 [0.1.0]: https://github.com/comsysto/pi-slack-bridge/releases/tag/v0.1.0
