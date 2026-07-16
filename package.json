@@ -7,7 +7,8 @@
   "pi": {
     "extensions": [
       "./dist/bridge/index.js"
-    ]
+    ],
+    "image": "https://raw.githubusercontent.com/comsysto/pi-slack-bridge/main/media/markdown-formatting-screenshot.png"
   },
   "scripts": {
     "build": "tsc",
