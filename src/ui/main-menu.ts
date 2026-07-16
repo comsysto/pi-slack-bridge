@@ -27,6 +27,9 @@ export interface MenuContext {
   /** Toggle tool call visibility in remote messages. */
   toggleToolCalls: () => void;
 
+  /** Toggle auto-connect on session switch. */
+  toggleAutoConnect: () => void;
+
   /** Opt current session out of automatic bridge takeover. */
   optOut: () => void;
 
@@ -83,6 +86,7 @@ export async function openMainMenu(mctx: MenuContext): Promise<void> {
       "Disconnect",
       "Configure",
       "Toggle Tool Calls",
+      "Toggle Auto Connect",
       "Opt out",
       "Opt in",
       "Help",
@@ -104,6 +108,9 @@ export async function openMainMenu(mctx: MenuContext): Promise<void> {
       case "Toggle Tool Calls":
         mctx.toggleToolCalls();
         break;
+      case "Toggle Auto Connect":
+        mctx.toggleAutoConnect();
+        break;
       case "Opt out":
         mctx.optOut();
         break;
@@ -118,6 +125,7 @@ export async function openMainMenu(mctx: MenuContext): Promise<void> {
           "  /slk-bridge disconnect            — disconnect Slack\n" +
           "  /slk-bridge configure             — set up Slack bot token + app token\n" +
           "  /slk-bridge toggletools           — toggle tool call visibility\n" +
+          "  /slk-bridge autoconnect           — toggle auto-connect on session switch\n" +
           "  /slk-bridge list-sessions         — show up to 10 recent sessions\n" +
           "  /slk-bridge switch <number>       — switch to a listed session\n" +
           "  /slk-bridge sendfile <path>       — upload local file to current Slack chat",

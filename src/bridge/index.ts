@@ -1061,6 +1061,13 @@ export default function (pi: ExtensionAPI): void {
             const state = cfg.hideToolCalls ? "hidden" : "shown";
             context.ui.notify(`🔧 Tool calls ${state} in remote messages`, "info");
           },
+          toggleAutoConnect: () => {
+            const cfg = loadConfig();
+            cfg.autoConnect = cfg.autoConnect === false;
+            saveConfig(cfg);
+            const state = cfg.autoConnect !== false ? "on" : "off";
+            context.ui.notify(`🔌 Auto-connect ${state}`, "info");
+          },
           optOut: () => {
             const sessionFile = getCurrentSessionFile();
             if (!sessionFile) {
@@ -1322,6 +1329,15 @@ export default function (pi: ExtensionAPI): void {
           saveConfig(cfg);
           const toolState = cfg.hideToolCalls ? "hidden" : "shown";
           context.ui.notify(`🔧 Tool calls ${toolState} in remote messages`, "info");
+          break;
+        }
+
+        case "autoconnect": {
+          const cfg = loadConfig();
+          cfg.autoConnect = cfg.autoConnect === false;
+          saveConfig(cfg);
+          const state = cfg.autoConnect !== false ? "on" : "off";
+          context.ui.notify(`🔌 Auto-connect ${state}`, "info");
           break;
         }
 
