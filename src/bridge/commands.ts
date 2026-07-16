@@ -67,6 +67,7 @@ export function buildRemoteCommandList(
     "- `.bridge switch <number>`",
     "- `.bridge replay`",
     "- `.bridge sendfile <path>`",
+    "- `.bridge toggletools`",
   ];
 
   return lines.join("\n");
