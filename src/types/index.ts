@@ -37,8 +37,7 @@ export interface SlackBridgeConfig {
     appToken: string;
   };
   auth?: {
-    trustedUsers?: string[];
-    adminUserId?: string;
+    trustedUser?: string;
     channels?: Record<string, { enabled: boolean; mode: "all" | "mentions" | "trusted-only" }>;
     userChats?: Record<string, string>;
     claimOpen?: boolean;
