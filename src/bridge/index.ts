@@ -1027,16 +1027,81 @@ export default function (pi: ExtensionAPI): void {
       if (!subcommand || subcommand === "menu") {
         await openMainMenu({
           ui: context.ui,
-          slackClient,
-          auth,
-          updateWidget,
-          connectCurrentSession: async () => {
+          reconnect: async () => {
             const cfg = loadConfig();
-            cfg.autoConnect = true;
-            saveConfig(cfg);
-            await connectCurrentSession({ showTakeoverNotice: true, handoverReason: "user-request" });
+            slackClient = new SlackClient(cfg.slack!, auth);
+            if (acquireLock()) {
+              try {
+                await slackClient.connect();
+                setupSlackMessageHandler();
+                updateWidget();
+              } catch (err) {
+                releaseLock();
+                throw err;
+              }
+            }
           },
-          getCurrentSessionFile,
+          disconnect: async () => {
+            if (slackClient) {
+              await slackClient.disconnect();
+            }
+            releaseLock();
+            const cfg = loadConfig();
+            cfg.autoConnect = false;
+            saveConfig(cfg);
+            updateWidget();
+          },
+          toggleWidget: () => {
+            const cfg = loadConfig();
+            cfg.showWidget = cfg.showWidget === false;
+            saveConfig(cfg);
+            const state = cfg.showWidget !== false ? "shown" : "hidden";
+            context.ui.notify(`📊 Status widget ${state}`, "info");
+            updateWidget();
+          },
+          optOut: () => {
+            const sessionFile = getCurrentSessionFile();
+            if (!sessionFile) {
+              context.ui.notify("❌ No session file available for this session", "error");
+              return;
+            }
+            const cfg = loadConfig();
+            const optedOut = cfg.optedOutSessions ?? [];
+            if (optedOut.includes(sessionFile)) {
+              context.ui.notify("ℹ️ This session is already opted out of bridge takeover", "info");
+              return;
+            }
+            optedOut.push(sessionFile);
+            cfg.optedOutSessions = optedOut;
+            saveConfig(cfg);
+            context.ui.notify("🛑 This session will NOT take over the Slack bridge when active", "info");
+          },
+          optIn: () => {
+            const sessionFile = getCurrentSessionFile();
+            if (!sessionFile) {
+              context.ui.notify("❌ No session file available for this session", "error");
+              return;
+            }
+            const cfg = loadConfig();
+            const optedOut = cfg.optedOutSessions ?? [];
+            const idx = optedOut.indexOf(sessionFile);
+            if (idx === -1) {
+              context.ui.notify("ℹ️ This session was not opted out — nothing to do", "info");
+              return;
+            }
+            optedOut.splice(idx, 1);
+            cfg.optedOutSessions = optedOut.length > 0 ? optedOut : undefined;
+            saveConfig(cfg);
+            context.ui.notify("✅ This session can now take over the Slack bridge again", "info");
+          },
+          getStatusLine: () => {
+            const connected = slackClient?.isConnected ?? false;
+            const stats = auth.getStats();
+            const statusLine = connected
+              ? "  ● Connected"
+              : "  ○ Disconnected";
+            return `${statusLine}\n  Trusted users: ${stats.trustedUsers}`;
+          },
         });
         return;
       }
