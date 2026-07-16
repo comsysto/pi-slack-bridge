@@ -1,6 +1,6 @@
 {
   "name": "pi-slack-bridge",
-  "version": "0.4.0",
+  "version": "0.1.0",
   "description": "Bridge Slack into pi - a pure Slack remote control surface for the pi coding agent",
   "main": "dist/bridge/index.js",
   "types": "dist/bridge/index.d.ts",
