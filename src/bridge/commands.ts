@@ -6,7 +6,7 @@
 
 export function buildBridgeStatusText(
   slackConnected: boolean,
-  trustedUsers: number,
+  trustedUser: string | undefined,
   channels: number,
 ): string {
   const lines = [
@@ -14,7 +14,7 @@ export function buildBridgeStatusText(
     "",
     `  ${slackConnected ? "●" : "○"} Slack`,
     "",
-    `Trusted Users: ${trustedUsers}`,
+    `Trusted user: ${trustedUser ?? "None"}`,
     `Channels: ${channels}`,
     "━━━━━━━━━━━━━━━━━━━━━━━━━━━",
   ];

@@ -1106,10 +1106,12 @@ export default function (pi: ExtensionAPI): void {
           getStatusLine: () => {
             const connected = slackClient?.isConnected ?? false;
             const stats = auth.getStats();
+            const cfg = loadConfig();
             const statusLine = connected
               ? "  ● Connected"
               : "  ○ Disconnected";
-            return `${statusLine}\n  Trusted user: ${stats.trustedUser ?? "None"}`;
+            const autoConnect = cfg.autoConnect !== false ? "on" : "off";
+            return `${statusLine}\n  Trusted user: ${stats.trustedUser ?? "None"}\n  Auto-connect: ${autoConnect}`;
           },
         });
         return;
