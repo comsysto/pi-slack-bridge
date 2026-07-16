@@ -186,7 +186,7 @@ export class ChallengeAuth {
       try {
         await this.onSendMessage(
           chatId,
-          "🔐 Please enter the 6-digit code provided by the bot admin.\n⏱️ Expires in 2 minutes."
+          "🔐 Please enter the 6-digit code provided in your active Pi terminal session.\n⏱️ Expires in 2 minutes."
         );
       } catch (_err) {
         // Ignore send errors
