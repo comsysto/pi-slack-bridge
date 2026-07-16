@@ -699,6 +699,14 @@ export default function (pi: ExtensionAPI): void {
           );
           return true;
         }
+        case "toggletools": {
+          const cfg = loadConfig();
+          cfg.hideToolCalls = !cfg.hideToolCalls;
+          saveConfig(cfg);
+          const state = cfg.hideToolCalls ? "hidden" : "shown";
+          await sendRemoteText(message, `🔧 Tool calls ${state} in remote messages`);
+          return true;
+        }
         default:
           await sendRemoteText(message, `Unknown bridge command: ${subcommand}`);
           return true;
@@ -1046,13 +1054,12 @@ export default function (pi: ExtensionAPI): void {
             saveConfig(cfg);
             updateWidget();
           },
-          toggleWidget: () => {
+          toggleToolCalls: () => {
             const cfg = loadConfig();
-            cfg.showWidget = cfg.showWidget === false;
+            cfg.hideToolCalls = !cfg.hideToolCalls;
             saveConfig(cfg);
-            const state = cfg.showWidget !== false ? "shown" : "hidden";
-            context.ui.notify(`📊 Status widget ${state}`, "info");
-            updateWidget();
+            const state = cfg.hideToolCalls ? "hidden" : "shown";
+            context.ui.notify(`🔧 Tool calls ${state} in remote messages`, "info");
           },
           optOut: () => {
             const sessionFile = getCurrentSessionFile();

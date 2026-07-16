@@ -67,6 +67,7 @@ export function buildRemoteCommandList(
     "- `.bridge switch <number>`",
     "- `.bridge replay`",
     "- `.bridge sendfile <path>`",
+    "- `.bridge toggletools`",
   ];
 
   return lines.join("\n");
@@ -85,7 +86,7 @@ export function buildBridgeHelpText(): string {
     "/slk-bridge disconnect        Disconnect from Slack",
     "/slk-bridge configure <bot-token> <app-token>",
     "                              Configure Slack bot",
-    "/slk-bridge widget            Toggle status widget on/off",
+    "/slk-bridge toggletools       Toggle tool call visibility in remote messages",
     "/slk-bridge new [cwd]         Start a fresh bridge session for current or specified directory",
     "/slk-bridge list-sessions [number]  Show recent sessions (default 10)",
     "/slk-bridge switch <number>   Switch to one of all recent sessions",
@@ -94,7 +95,6 @@ export function buildBridgeHelpText(): string {
     "/slk-bridge optout            Opt this session out of automatic bridge takeover",
     "/slk-bridge optin             Re-allow this session to take over the bridge",
     "/slk-bridge optout list       Show sessions opted out of takeover",
-    "/slk-bridge toggletools       Toggle tool call visibility",
     "",
     "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
   ].join("\n");
