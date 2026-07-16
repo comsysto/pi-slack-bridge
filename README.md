@@ -17,10 +17,8 @@ Summarized featureset:
 
 Currently only one terminal session at a time can be bridged to Slack.
 
-
-
-
 ## Setup
+
 ### 1. Install
 
 ```bash
@@ -80,7 +78,7 @@ export PI_SLACK_APP_TOKEN="xapp-your-slack-app-token"
 /slk-bridge connect
 ```
 
-The bridge automatically connects on next pi launch if `autoConnect` is set in the `~/.pi/slk-bridge.json`.
+The bridge automatically connects after token configuration or on next pi launch if `autoConnect` is set in the `~/.pi/slk-bridge.json`.
 
 ### 4. Authenticate Users
 
