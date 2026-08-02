@@ -298,8 +298,8 @@ export default function (pi: ExtensionAPI): void {
   }
 
   async function notifySlackSessionHandover(reason?: "user-request" | "active-session"): Promise<void> {
-    const slackChats = auth.getNotificationChatIds();
-    if (slackChats.length === 0) return;
+    const chatId = auth.getNotificationChatId();
+    if (!chatId) return;
 
     const handoverMessage = [
       "🔄 Session changed",
@@ -310,31 +310,29 @@ export default function (pi: ExtensionAPI): void {
     // returns quickly — pi can process the user's input without waiting for 50 Slack API calls.
     const conversation = getConversationHistory(ctx.sessionManager);
     void (async () => {
-      for (const chatId of slackChats) {
-        try {
-          const threadTs = await sendToRemoteChat(chatId, handoverMessage, {
-            forceTopLevel: true,
-          });
+      try {
+        const threadTs = await sendToRemoteChat(chatId, handoverMessage, {
+          forceTopLevel: true,
+        });
 
-          for (const entry of conversation) {
-            const text = entry.role === "user"
-              ? `🗣️ **User:** ${entry.text}`
-              : entry.text;
-            await sendToRemoteChat(chatId, text, { threadId: threadTs });
-          }
-
-          if (threadTs && conversation.length > 0) {
-            markLatestAssistantDeliveredToSlackThread(
-              chatId,
-              threadTs,
-              undefined,
-              getCurrentSessionFile,
-              () => getLastAssistantMessageInfo(ctx.sessionManager),
-            );
-          }
-        } catch {
-          // Ignore notification failures
+        for (const entry of conversation) {
+          const text = entry.role === "user"
+            ? `🗣️ **User:** ${entry.text}`
+            : entry.text;
+          await sendToRemoteChat(chatId, text, { threadId: threadTs });
         }
+
+        if (threadTs && conversation.length > 0) {
+          markLatestAssistantDeliveredToSlackThread(
+            chatId,
+            threadTs,
+            undefined,
+            getCurrentSessionFile,
+            () => getLastAssistantMessageInfo(ctx.sessionManager),
+          );
+        }
+      } catch {
+        // Ignore notification failures
       }
     })();
   }
@@ -1434,12 +1432,11 @@ export default function (pi: ExtensionAPI): void {
           }
 
           // Get trusted user's DM chatId
-          const notificationChatIds = auth.getNotificationChatIds();
-          if (notificationChatIds.length === 0) {
+          const handoverChatId = auth.getNotificationChatId();
+          if (!handoverChatId) {
             context.ui.notify("❌ No trusted user found. Authenticate a user first.", "error");
             break;
           }
-          const handoverChatId = notificationChatIds[0];
 
           if (context.isIdle()) {
             // Idle: send history immediately
