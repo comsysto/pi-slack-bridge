@@ -5,6 +5,7 @@
  * The bridge owns all state and all Slack lifecycle.
  */
 
+import { buildBridgeHelpText } from "../bridge/commands.js";
 import { loadConfig, saveConfig } from "../config/index.js";
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -118,19 +119,7 @@ export async function openMainMenu(mctx: MenuContext): Promise<void> {
         mctx.optIn();
         break;
       case "Help":
-        mctx.ui.notify(
-          "Subcommands:\n" +
-          "  /slk-bridge status                — show Slack connection status\n" +
-          "  /slk-bridge connect               — connect Slack\n" +
-          "  /slk-bridge disconnect            — disconnect Slack\n" +
-          "  /slk-bridge configure             — set up Slack bot token + app token\n" +
-          "  /slk-bridge toggletools           — toggle tool call visibility\n" +
-          "  /slk-bridge autoconnect           — toggle auto-connect on session switch\n" +
-          "  /slk-bridge list-sessions         — show up to 10 recent sessions\n" +
-          "  /slk-bridge switch <number>       — switch to a listed session\n" +
-          "  /slk-bridge sendfile <path>       — upload local file to current Slack chat",
-          "info",
-        );
+        mctx.ui.notify(buildBridgeHelpText(), "info");
         break;
     }
     return mainMenu();

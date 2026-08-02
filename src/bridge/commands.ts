@@ -96,6 +96,7 @@ export function buildBridgeHelpText(): string {
     "/slk-bridge optout            Opt this session out of automatic bridge takeover",
     "/slk-bridge optin             Re-allow this session to take over the bridge",
     "/slk-bridge optout list       Show sessions opted out of takeover",
+    "/slk-bridge handover          Push terminal session to Slack",
     "/slk-bridge toggletools       Toggle tool call visibility",
     "",
     "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
