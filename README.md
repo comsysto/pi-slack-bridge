@@ -107,8 +107,9 @@ Only one `tmux` session can exist at time to function as a container for a newly
 There are several main commands introduced:
 
 - `/slk-bridge new [path]` - kill current Pi session and start a new one inside a tmux session. Include `path` as an optional argument to start the session in a path on your OS
-- `/slk-bridge list-sessions [number]` - list the recent 10 sessions of your Pi agent. Include an optional `number` argument to list the last `number` sessions.
-- `/slk-bridge switch <number>` - switch to a session denoted by the number in the `list-sessions` command. The old tmux session (if it exists) gets used for switching the Pi terminal session.
+- `/slk-bridge resume` - list the recent 10 sessions of your Pi agent.
+- `/slk-bridge resume list [number]` - list the recent `number` sessions (default 10). Include an optional `number` argument to list the last `number` sessions.
+- `/slk-bridge resume <number>` - resume a session denoted by the number in the `resume`/`resume list` output. The old tmux session (if it exists) gets used for switching the Pi terminal session.
 - `/slk-bridge handover` - push the current terminal session into Slack so the conversation can continue there
 
 Each command is implemented in a deterministic fashion inside the Pi Agent harness so that no LLM call is triggered.

@@ -431,7 +431,7 @@ export default function (pi: ExtensionAPI): void {
     return buildTmuxConnectSummary(result);
   }
 
-  async function switchToListedBridgeSession(index: number): Promise<string> {
+  async function resumeToListedBridgeSession(index: number): Promise<string> {
     const sessions = await listRecentSessions();
     const selected = sessions[index - 1];
     if (!selected) {
@@ -449,15 +449,15 @@ export default function (pi: ExtensionAPI): void {
 
   // ── Message handling ─────────────────────────────────────────────────────
 
-  function isExplicitRemoteSwitchCommand(message: ExternalMessage): boolean {
-    return /^\.bridge\s+switch(?:\s|$)/i.test(message.content.trim());
+  function isExplicitRemoteResumeCommand(message: ExternalMessage): boolean {
+    return /^\.bridge\s+resume(?:\s|$)/i.test(message.content.trim());
   }
 
   async function forwardRemoteCommandToPi(message: ExternalMessage, text: string): Promise<void> {
     pendingRemoteChat = toPendingRemoteChat(message);
-    const explicitSwitchCommand = isExplicitRemoteSwitchCommand(message);
+    const explicitResumeCommand = isExplicitRemoteResumeCommand(message);
 
-    if (message.threadId && !explicitSwitchCommand) {
+    if (message.threadId && !explicitResumeCommand) {
       rememberSlackThreadForSession(message.chatId, message.threadId, undefined, getCurrentSessionFile);
     }
     if (ctx.isIdle()) {
@@ -515,7 +515,7 @@ export default function (pi: ExtensionAPI): void {
       return false;
     }
 
-    if (isExplicitRemoteSwitchCommand(message)) {
+    if (isExplicitRemoteResumeCommand(message)) {
       return false;
     }
 
@@ -542,8 +542,8 @@ export default function (pi: ExtensionAPI): void {
       return;
     }
 
-    const explicitSwitchCommand = isExplicitRemoteSwitchCommand(message);
-    if (message.threadId && !explicitSwitchCommand) {
+    const explicitResumeCommand = isExplicitRemoteResumeCommand(message);
+    if (message.threadId && !explicitResumeCommand) {
       rememberSlackThreadForSession(message.chatId, message.threadId, undefined, getCurrentSessionFile);
     }
 
@@ -669,29 +669,31 @@ export default function (pi: ExtensionAPI): void {
             await sendRemoteText(message, `❌ Failed to start fresh bridge session: ${(err as Error).message}`);
           }
           return true;
-        case "list-sessions":
-        case "listsessions":
-        case "list-session":
-        case "listsession": {
-          const limit = rest ? parseInt(rest, 10) : 10;
-          if (!Number.isFinite(limit) || limit < 1) {
-            await sendRemoteText(message, "Usage: `.bridge list-sessions [number]`");
+        case "resume": {
+          if (!rest) {
+            await sendRemoteText(message, await buildSessionListText(10));
             return true;
           }
-          await sendRemoteText(message, await buildSessionListText(limit));
-          return true;
-        }
-        case "switch": {
+          if (/^list(?:\s|$)/i.test(rest)) {
+            const limitArg = rest.replace(/^list\s*/i, "").trim();
+            const limit = limitArg ? parseInt(limitArg, 10) : 10;
+            if (!Number.isFinite(limit) || limit < 1) {
+              await sendRemoteText(message, "Usage: `.bridge resume list [number]`");
+              return true;
+            }
+            await sendRemoteText(message, await buildSessionListText(limit));
+            return true;
+          }
           const index = parseInt(rest, 10);
           if (!Number.isFinite(index) || index < 1) {
-            await sendRemoteText(message, "Usage: `.bridge switch <number>`");
+            await sendRemoteText(message, "Usage: `.bridge resume <number>` or `.bridge resume list [number]`");
             return true;
           }
           try {
-            const summary = await switchToListedBridgeSession(index);
+            const summary = await resumeToListedBridgeSession(index);
             await sendRemoteText(message, summary);
           } catch (err) {
-            await sendRemoteText(message, `❌ Failed to switch session: ${(err as Error).message}`);
+            await sendRemoteText(message, `❌ Failed to resume session: ${(err as Error).message}`);
           }
           return true;
         }
@@ -1087,7 +1089,7 @@ export default function (pi: ExtensionAPI): void {
   // ── /slk-bridge command (TUI local) ────────────────────────────────────────
 
   pi.registerCommand("slk-bridge", {
-    description: "Manage Slack bridge connection (help|status|connect|disconnect|configure|widget|new|list-sessions|switch)",
+    description: "Manage Slack bridge connection (help|status|connect|disconnect|configure|widget|new|resume)",
     handler: async (args: string, context) => {
       const parts = args.trim().split(/\s+/).filter((p) => p.length > 0);
       const subcommand = parts[0] || "";
@@ -1269,33 +1271,36 @@ export default function (pi: ExtensionAPI): void {
           break;
         }
 
-        case "list-sessions":
-        case "list-session": {
-          const limitArg = parts[1];
-          const limit = limitArg ? parseInt(limitArg, 10) : 10;
-          if (!Number.isFinite(limit) || limit < 1) {
-            context.ui.notify("Usage: /slk-bridge list-sessions [number]", "error");
+        case "resume": {
+          const rest = parts.slice(1).join(" ").trim();
+          if (!rest) {
+            context.ui.notify(await buildSessionListText(10), "info");
             break;
           }
-          try {
-            context.ui.notify(await buildSessionListText(limit), "info");
-          } catch (err) {
-            context.ui.notify(`❌ Failed to list sessions: ${(err as Error).message}`, "error");
+          if (/^list(?:\s|$)/i.test(rest)) {
+            const limitArg = rest.replace(/^list\s*/i, "").trim();
+            const limit = limitArg ? parseInt(limitArg, 10) : 10;
+            if (!Number.isFinite(limit) || limit < 1) {
+              context.ui.notify("Usage: /slk-bridge resume list [number]", "error");
+              break;
+            }
+            try {
+              context.ui.notify(await buildSessionListText(limit), "info");
+            } catch (err) {
+              context.ui.notify(`❌ Failed to list sessions: ${(err as Error).message}`, "error");
+            }
+            break;
           }
-          break;
-        }
-
-        case "switch": {
-          const index = parseInt(parts[1] || "", 10);
+          const index = parseInt(rest, 10);
           if (!Number.isFinite(index) || index < 1) {
-            context.ui.notify("Usage: /slk-bridge switch <number>", "error");
+            context.ui.notify("Usage: /slk-bridge resume <number> or /slk-bridge resume list [number]", "error");
             break;
           }
           try {
-            const summary = await switchToListedBridgeSession(index);
+            const summary = await resumeToListedBridgeSession(index);
             context.ui.notify(summary, "info");
           } catch (err) {
-            context.ui.notify(`❌ Failed to switch session: ${(err as Error).message}`, "error");
+            context.ui.notify(`❌ Failed to resume session: ${(err as Error).message}`, "error");
           }
           break;
         }

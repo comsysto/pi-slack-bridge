@@ -28,7 +28,7 @@ export interface MenuContext {
   /** Toggle tool call visibility in remote messages. */
   toggleToolCalls: () => void;
 
-  /** Toggle auto-connect on session switch. */
+  /** Toggle auto-connect on session resume. */
   toggleAutoConnect: () => void;
 
   /** Opt current session out of automatic bridge takeover. */
