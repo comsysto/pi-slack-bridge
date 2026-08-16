@@ -41,7 +41,7 @@ describe('connectSlackBridge', () => {
     });
     vi.doMock('../auth/challenge.js', () => ({
       ChallengeAuth: vi.fn().mockImplementation(() => ({
-        getNotificationChatId: vi.fn().mockReturnValue('D123'),
+        getNotificationChatIds: vi.fn().mockReturnValue(['D123']),
         getStats: vi.fn().mockReturnValue({ trustedUser: 'testuser', channels: 0 }),
         loadFromConfig: vi.fn(),
         exportConfig: vi.fn().mockReturnValue({}),
