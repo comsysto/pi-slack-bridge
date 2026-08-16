@@ -397,14 +397,9 @@ export class ChallengeAuth {
     return hadUser;
   }
 
-  getNotificationChatIds(): string[] {
-    if (this.trustedUserId) {
-      const chatId = this.userChats.get(this.trustedUserId);
-      if (chatId) {
-        return [chatId];
-      }
-    }
-    return [];
+  getNotificationChatId(): string | undefined {
+    if (!this.trustedUserId) return undefined;
+    return this.userChats.get(this.trustedUserId);
   }
 
   /**

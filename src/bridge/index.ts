@@ -80,6 +80,11 @@ export default function (pi: ExtensionAPI): void {
     entries: string[];
     threadId?: string;
   } | null = null;
+  let handoverPending: {
+    chatId: string;
+    resolve: () => void;
+    reject: (err: Error) => void;
+  } | null = null;
   const handoffDir = path.join(os.homedir(), ".pi", "slk-bridge-handoffs");
 
   // ── Short-lived helpers (bridge state accessors) ──────────────────────────
@@ -112,6 +117,15 @@ export default function (pi: ExtensionAPI): void {
       threadId: message.threadId,
       isThreadReply: message.isThreadReply,
     };
+  }
+
+  /** Extract the final assistant response text from agent_end messages */
+  function extractFinalResponseText(messages: Array<{ role: string; content?: any; stopReason?: string }>): string {
+    const finalAssistant = messages
+      .filter((m) => m.role === "assistant" && m.stopReason === "stop")
+      .pop();
+    if (!finalAssistant) return "";
+    return extractTextFromMessage(finalAssistant as AssistantMessage);
   }
 
   /** Resolve a thread ID: prefer explicit, fall back to remembered */
@@ -284,8 +298,8 @@ export default function (pi: ExtensionAPI): void {
   }
 
   async function notifySlackSessionHandover(reason?: "user-request" | "active-session"): Promise<void> {
-    const slackChats = auth.getNotificationChatIds();
-    if (slackChats.length === 0) return;
+    const chatId = auth.getNotificationChatId();
+    if (!chatId) return;
 
     const handoverMessage = [
       "🔄 Session changed",
@@ -296,36 +310,60 @@ export default function (pi: ExtensionAPI): void {
     // returns quickly — pi can process the user's input without waiting for 50 Slack API calls.
     const conversation = getConversationHistory(ctx.sessionManager);
     void (async () => {
-      for (const chatId of slackChats) {
-        try {
-          const threadTs = await sendToRemoteChat(chatId, handoverMessage, {
-            forceTopLevel: true,
-          });
+      try {
+        const threadTs = await sendToRemoteChat(chatId, handoverMessage, {
+          forceTopLevel: true,
+        });
 
-          for (const entry of conversation) {
-            const text = entry.role === "user"
-              ? `🗣️ **User:** ${entry.text}`
-              : entry.text;
-            await sendToRemoteChat(chatId, text, { threadId: threadTs });
-          }
-
-          if (threadTs && conversation.length > 0) {
-            markLatestAssistantDeliveredToSlackThread(
-              chatId,
-              threadTs,
-              undefined,
-              getCurrentSessionFile,
-              () => getLastAssistantMessageInfo(ctx.sessionManager),
-            );
-          }
-        } catch {
-          // Ignore notification failures
+        for (const entry of conversation) {
+          const text = entry.role === "user"
+            ? `🗣️ **User:** ${entry.text}`
+            : entry.text;
+          await sendToRemoteChat(chatId, text, { threadId: threadTs });
         }
+
+        if (threadTs && conversation.length > 0) {
+          markLatestAssistantDeliveredToSlackThread(
+            chatId,
+            threadTs,
+            undefined,
+            getCurrentSessionFile,
+            () => getLastAssistantMessageInfo(ctx.sessionManager),
+          );
+        }
+      } catch {
+        // Ignore notification failures
       }
     })();
   }
 
   // ── Connect / disconnect ─────────────────────────────────────────────────
+
+  /**
+   * Connect Slack bridge without sending any handover notification.
+   * Ensures Slack client is connected and lock is held.
+   */
+  async function connectSlackBridge(): Promise<void> {
+    if (!hasConfiguredSlack()) {
+      throw new Error("Slack not configured");
+    }
+    if (slackIsConnected()) return;
+
+    if (!acquireLock()) {
+      throw new Error("Another session holds the bridge lock");
+    }
+
+    try {
+      if (slackClient) {
+        await slackClient.connect();
+      }
+      updateWidget();
+    } catch (err) {
+      releaseLock();
+      updateWidget();
+      throw err;
+    }
+  }
 
   async function connectCurrentSession(options?: {
     respectAutoConnect?: boolean;
@@ -359,10 +397,7 @@ export default function (pi: ExtensionAPI): void {
     }
 
     try {
-      if (slackClient) {
-        await slackClient.connect();
-      }
-      updateWidget();
+      await connectSlackBridge();
       if (tookOver && options?.notifySlackHandover !== false) {
         await notifySlackSessionHandover(options?.handoverReason);
       }
@@ -955,54 +990,85 @@ export default function (pi: ExtensionAPI): void {
   });
 
   /**
-   * agent_end → flush all accumulated turn messages to Slack.
+   * agent_end → handle both Slack-originated message flush and terminal handover.
    *
-   * Each accumulated entry becomes a separate Slack message. Only the last
-   * entry gets the footer (model info, context usage, etc.). Then clear the
-   * working reaction so the user knows we're done.
+   * Two independent branches:
+   * 1. Slack-originated message: flush accumulated turns to the existing Slack thread
+   * 2. Terminal handover: send conversation history + final response to a new Slack thread
    */
-  pi.on("agent_end", async (_event, _context) => {
-    if (!turnAccumulator || !ownsBridgeConnection()) {
-      turnAccumulator = null;
-      return;
+  pi.on("agent_end", async (event, _context) => {
+    // Branch 1: Message originated from Slack — flush accumulated turns
+    if (pendingRemoteChat && ownsBridgeConnection()) {
+      try {
+        const totalEntries = turnAccumulator?.entries.length ?? 0;
+        let lastSlackThreadId = turnAccumulator?.threadId;
+
+        for (let ei = 0; ei < totalEntries; ei++) {
+          const isLast = ei === totalEntries - 1;
+          const entry = turnAccumulator!.entries[ei];
+          const resolvedThreadId = await sendToRemoteChat(
+            turnAccumulator!.chatId,
+            entry,
+            {
+              threadId: turnAccumulator!.threadId,
+              noFooter: !isLast,
+            },
+          );
+          if (resolvedThreadId) {
+            lastSlackThreadId = resolvedThreadId;
+          }
+        }
+
+        if (lastSlackThreadId) {
+          markLatestAssistantDeliveredToSlackThread(
+            turnAccumulator!.chatId,
+            lastSlackThreadId,
+            undefined,
+            getCurrentSessionFile,
+            () => getLastAssistantMessageInfo(ctx.sessionManager),
+          );
+        }
+      } catch (err) {
+        ctx.ui.notify(`Failed to send accumulated response: ${(err as Error).message}`, "error");
+      }
+      await clearSlackWorkingReaction();
     }
 
-    try {
-      const totalEntries = turnAccumulator.entries.length;
-      let lastSlackThreadId = turnAccumulator.threadId;
+    // Branch 2: Terminal handover — send history + final response to Slack
+    if (handoverPending) {
+      const conversation = getConversationHistory(ctx.sessionManager);
+      const finalResponse = extractFinalResponseText(event.messages);
 
-      for (let ei = 0; ei < totalEntries; ei++) {
-        const isLast = ei === totalEntries - 1;
-        const entry = turnAccumulator.entries[ei];
-        const resolvedThreadId = await sendToRemoteChat(
-          turnAccumulator.chatId,
-          entry,
-          {
-            threadId: turnAccumulator.threadId,
-            noFooter: !isLast,
-          },
-        );
-        if (resolvedThreadId) {
-          lastSlackThreadId = resolvedThreadId;
+      if (conversation.length > 0 || finalResponse) {
+        const threadTs = await sendToRemoteChat(handoverPending.chatId, "🔄 Terminal session pushed to Slack", {
+          forceTopLevel: true,
+        });
+        if (threadTs) {
+          for (const entry of conversation) {
+            const text = entry.role === "user"
+              ? `\u{1F5E3}\uFE0F **User:** ${entry.text}`
+              : entry.text;
+            await sendToRemoteChat(handoverPending.chatId, text, { threadId: threadTs });
+          }
+          if (finalResponse) {
+            await sendToRemoteChat(handoverPending.chatId, finalResponse, { threadId: threadTs });
+          }
+          markLatestAssistantDeliveredToSlackThread(
+            handoverPending.chatId,
+            threadTs,
+            undefined,
+            getCurrentSessionFile,
+            () => getLastAssistantMessageInfo(ctx.sessionManager),
+          );
         }
       }
-
-      if (lastSlackThreadId) {
-        markLatestAssistantDeliveredToSlackThread(
-          turnAccumulator.chatId,
-          lastSlackThreadId,
-          undefined,
-          getCurrentSessionFile,
-          () => getLastAssistantMessageInfo(ctx.sessionManager),
-        );
-      }
-    } catch (err) {
-      ctx.ui.notify(`Failed to send accumulated response: ${(err as Error).message}`, "error");
-    } finally {
-      await clearSlackWorkingReaction();
-      pendingRemoteChat = null;
-      turnAccumulator = null;
+      handoverPending.resolve();
+      handoverPending = null;
     }
+
+    // Common state cleanup
+    pendingRemoteChat = null;
+    turnAccumulator = null;
   });
 
   pi.on("session_shutdown", async (_event, _context) => {
@@ -1033,16 +1099,8 @@ export default function (pi: ExtensionAPI): void {
           reconnect: async () => {
             const cfg = loadConfig();
             slackClient = new SlackClient(cfg.slack!, auth);
-            if (acquireLock()) {
-              try {
-                await slackClient.connect();
-                setupSlackMessageHandler();
-                updateWidget();
-              } catch (err) {
-                releaseLock();
-                throw err;
-              }
-            }
+            await connectSlackBridge();
+            setupSlackMessageHandler();
           },
           disconnect: async () => {
             if (slackClient) {
@@ -1343,6 +1401,90 @@ export default function (pi: ExtensionAPI): void {
           break;
         }
 
+        case "handover": {
+          // Preamble: opt in if needed, connect Slack if needed
+          const sessionFile = getCurrentSessionFile();
+          if (sessionFile) {
+            const cfg = loadConfig();
+            const optedOut = cfg.optedOutSessions ?? [];
+            const idx = optedOut.indexOf(sessionFile);
+            if (idx !== -1) {
+              optedOut.splice(idx, 1);
+              cfg.optedOutSessions = optedOut.length > 0 ? optedOut : undefined;
+              saveConfig(cfg);
+              context.ui.notify("ℹ️ Session auto-opted in for handover", "info");
+            }
+          }
+
+          if (!hasConfiguredSlack()) {
+            context.ui.notify("❌ Slack not configured. Run /slk-bridge configure first", "error");
+            break;
+          }
+
+          if (!slackIsConnected()) {
+            try {
+              await connectSlackBridge();
+              context.ui.notify("✅ Slack connected for handover", "info");
+            } catch (err) {
+              context.ui.notify(`❌ Failed to connect Slack: ${(err as Error).message}`, "error");
+              break;
+            }
+          }
+
+          // Get trusted user's DM chatId
+          const handoverChatId = auth.getNotificationChatId();
+          if (!handoverChatId) {
+            context.ui.notify("❌ No trusted user found. Authenticate a user first.", "error");
+            break;
+          }
+
+          if (context.isIdle()) {
+            // Idle: send history immediately
+            const conversation = getConversationHistory(ctx.sessionManager);
+            if (conversation.length === 0) {
+              context.ui.notify("ℹ️ No conversation history to push", "info");
+              break;
+            }
+
+            const threadTs = await sendToRemoteChat(handoverChatId, "🔄 Terminal session pushed to Slack", {
+              forceTopLevel: true,
+            });
+            if (!threadTs) {
+              context.ui.notify("❌ Failed to create Slack thread", "error");
+              break;
+            }
+            for (const entry of conversation) {
+              const text = entry.role === "user"
+                ? `\u{1F5E3}\uFE0F **User:** ${entry.text}`
+                : entry.text;
+              await sendToRemoteChat(handoverChatId, text, { threadId: threadTs });
+            }
+            markLatestAssistantDeliveredToSlackThread(
+              handoverChatId,
+              threadTs,
+              undefined,
+              getCurrentSessionFile,
+              () => getLastAssistantMessageInfo(ctx.sessionManager),
+            );
+            context.ui.notify("✅ Session pushed to Slack", "info");
+          } else {
+            // Busy: wait for agent_end
+            let resolveHandover: (() => void) | null = null;
+            const handoverPromise = new Promise<void>((resolve) => {
+              resolveHandover = resolve;
+            });
+            handoverPending = {
+              chatId: handoverChatId,
+              resolve: resolveHandover!,
+              reject: (_err: Error) => { /* reject won't happen in normal flow */ },
+            };
+            context.ui.notify("⏳ Waiting for agent to finish...", "info");
+            await handoverPromise;
+            context.ui.notify("✅ Session pushed to Slack", "info");
+          }
+          break;
+        }
+
         case "accept-handoff": {
           const handoffFile = parts.slice(1).join(" ").trim();
           if (!handoffFile) {
@@ -1361,10 +1503,7 @@ export default function (pi: ExtensionAPI): void {
               timestamp: new Date(payload.message.timestamp),
             };
 
-            await connectCurrentSession({
-              showTakeoverNotice: false,
-              notifySlackHandover: false,
-            });
+            await connectSlackBridge();
             await handleIncomingRemoteMessage(message, {
               allowSessionRouting: false,
               replayLastAssistantMessage: payload.replayLastAssistantMessage === true,
