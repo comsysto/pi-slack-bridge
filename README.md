@@ -11,11 +11,11 @@ Summarized featureset:
 - Run deterministic remote commands (`/slk-bridge ...` in pi's terminal, `.bridge ...` in Slack DMs)
 - Upload/download files between Slack and pi
 - Manage multiple pi sessions per Slack thread (each session gets its own thread)
-- Switch between sessions, spawn new ones, and hand off seamlessly
+- Switch between sessions, spawn new ones, and hand over the active terminal session to Slack
 - Session message replay - when resuming a session, prior conversation history is replayed into the Slack thread
 - Opt sessions in/out of automatic bridge takeover
 
-Currently only one terminal session at a time can be bridged to Slack.
+Currently only one terminal session at a time can be bridged to Slack. When another session connects, ownership of the Slack bridge is transferred to that session.
 
 ## Setup
 
@@ -80,13 +80,13 @@ export PI_SLACK_APP_TOKEN="xapp-your-slack-app-token"
 
 The bridge automatically connects after token configuration or on next pi launch if `autoConnect` is set in the `~/.pi/slk-bridge.json`.
 
-### 4. Authenticate Users
+### 4. Authenticate a Slack User
 
 When a Slack user messages the bot for the first time, they receive a 6-digit challenge code. The code appears in their pi terminal.
 
-The user then enters the code in the bot chat to become a trusted user.
+The user then enters the code in the bot chat to become the trusted Slack user for this bridge.
 
-> After the first successful claim, unknown users are silently ignored. To re-open claiming: call `/slk-bridge releaseclaim` in a Pi terminal session
+> Only one Slack user is trusted at a time. After the first successful claim, other users are ignored until claiming is manually re-opened with `/slk-bridge releaseclaim` in a Pi terminal session.
 
 ## Main deviations from pi-messenger-bridge
 
@@ -104,16 +104,17 @@ The goal is to pick up your Pi session from Slack or from the terminal whenever 
 For this, `tmux` is used as the backbone to create new Pi sessions, switch to older ones or list previous ones.
 Only one `tmux` session can exist at time to function as a container for a newly created or switched-to Pi session.
 
-There are 3 main commands introduced:
+There are several main commands introduced:
 
 - `/slk-bridge new [path]` - kill current Pi session and start a new one inside a tmux session. Include `path` as an optional argument to start the session in a path on your OS
 - `/slk-bridge list-sessions [number]` - list the recent 10 sessions of your Pi agent. Include an optional `number` argument to list the last `number` sessions.
 - `/slk-bridge switch <number>` - switch to a session denoted by the number in the `list-sessions` command. The old tmux session (if it exists) gets used for switching the Pi terminal session.
+- `/slk-bridge handover` - push the current terminal session into Slack so the conversation can continue there
 
 Each command is implemented in a deterministic fashion inside the Pi Agent harness so that no LLM call is triggered.
 To optout/optin a local terminal session being bridged to Slack, use `/slk-bridge optout` or `/slk-bridge optin` respectively.
 
-Whenever a session is switched, it gets assigned its own new thread in the DM with the Slack App bridged to your Pi agent. A user can also switch to a session by continuing the respective thread in Slack.
+Whenever a session is switched, it gets assigned its own new thread in the DM with the Slack App bridged to your Pi agent. A user can also switch to a session by continuing the respective thread in Slack. The same thread-based flow is used when explicitly pushing a terminal session to Slack via `/slk-bridge handover`.
 
 ### Deterministic Dot Commands
 
@@ -131,7 +132,7 @@ To list all available commands, send `.` in Slack.
 - Environment variables take precedence over file config
 - Challenge-based authentication (6-digit code, 3 attempts, 2-minute expiry)
 - Transport-namespaced user IDs prevent impersonation
-- After first successful claim to the Slack app, unknown users are silently ignored until the user manually releases claim via `/slk-bridge releaseclaim`
+- Only one trusted Slack user is supported at a time; after the first successful claim, other users are ignored until claim is manually re-opened via `/slk-bridge releaseclaim`
 
 ## Troubleshooting
 
@@ -151,6 +152,7 @@ Or set in config:
 
 - **"Another instance is connected"** — the single-instance guard prevents duplicate Slack connections. Use `/slk-bridge connect` in the active session or force-acquire by typing in the target session.
 - **No Slack messages received** — verify Socket Mode is enabled in your Slack app configuration and both tokens are correct.
+- **Handover not working** — ensure a trusted Slack user has already claimed the bridge, since `/slk-bridge handover` needs a remembered Slack DM target.
 - **Handoff not working** — ensure tmux is installed and `pi` is in your PATH. Handoff spawns `pi --session <target>` in tmux.
 
 ## Development

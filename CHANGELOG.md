@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Added
+- **Terminal-to-Slack handover** — `/slk-bridge handover` pushes the active terminal session into Slack and continues the conversation there
+- **Connect/handover test coverage** — added tests for `connect` and `handover` flows
+
+### Changed
+- **Single trusted user routing** — notification delivery and handover targeting now use one remembered trusted Slack user/DM instead of arrays of notification chat IDs
+- **Session takeover flow** — connecting from another session now performs a cleaner handover of the active Slack connection
+
+### Fixed
+- **Handover robustness** — improved behavior around takeover/connect sequencing and session ownership transitions
+
 ## [0.2.0] - 2026-07-16
 
 ### Added
