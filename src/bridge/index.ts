@@ -859,17 +859,25 @@ export default function (pi: ExtensionAPI): void {
     }
 
     // Auto-connect if configured
+    //
+    // Non-blocking: acquiring the lock is synchronous (cheap), but the actual
+    // Slack connection (jiti-transpiling @slack/bolt + auth.test() + Socket Mode
+    // start) is deferred to a background task. session_start is awaited by pi's
+    // extension runner, so awaiting the full connect() here would gate startup
+    // readiness on Slack connectivity (which can hang for a long time when the
+    // network isn't ready right after a machine restart).
     if (slackClient && config.autoConnect !== false) {
       if (!acquireLock()) {
         ctx.ui.notify("ℹ️ slk-bridge: another instance is already connected — skipping auto-connect", "info");
       } else {
-        try {
-          await slackClient.connect();
-          updateWidget();
-        } catch (err) {
-          releaseLock();
-          ctx.ui.notify(`⚠️ Slack connection failed: ${(err as Error).message}`, "warning");
-        }
+        void (async () => {
+          try {
+            await connectSlackBridge();
+          } catch (err) {
+            releaseLock();
+            ctx.ui.notify(`⚠️ Slack connection failed: ${(err as Error).message}`, "warning");
+          }
+        })();
       }
     }
 

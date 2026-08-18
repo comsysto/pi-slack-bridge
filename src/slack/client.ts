@@ -35,6 +35,25 @@ async function loadSlackBolt() {
   return slack;
 }
 
+// Fail-fast guard for the Socket Mode connect. The underlying @slack/socket-mode
+// client retries `apps.connections.open` with exponential backoff (retries: 100,
+// factor: 1.3, maxTimeout: Infinity), so an unreachable Slack can otherwise block
+// connect() (and anything awaiting it) for a very long time.
+const CONNECT_TIMEOUT_MS = 10_000;
+
+const TIMEOUT_SENTINEL = Symbol("slack-connect-timeout");
+
+/**
+ * Rejects with TIMEOUT_SENTINEL after `ms` milliseconds unless the competing
+ * promise settles first. Used to fail fast instead of hanging on a slow or
+ * unreachable Slack connection.
+ */
+async function timeoutReject(ms: number): Promise<symbol> {
+  return new Promise<symbol>((resolve) => {
+    setTimeout(() => resolve(TIMEOUT_SENTINEL), ms);
+  });
+}
+
 /**
  * Slack client using @slack/bolt via Socket Mode
  */
@@ -54,7 +73,8 @@ export class SlackClient {
 
   constructor(
     private config: { botToken: string; appToken: string },
-    private auth: ChallengeAuth
+    private auth: ChallengeAuth,
+    private connectTimeoutMs: number = CONNECT_TIMEOUT_MS
   ) {}
 
   get isConnected(): boolean {
@@ -120,6 +140,28 @@ export class SlackClient {
   }
 
   async connect(): Promise<void> {
+    if (this._isConnected) return;
+
+    // Fail-fast guard: the underlying @slack/bolt socket-mode client retries
+    // `apps.connections.open` with exponential backoff (retries: 100, factor:
+    // 1.3, maxTimeout: Infinity) and the extension's session_start used to await
+    // this — an unreachable Slack could block startup for a very long time.
+    // Wrap the whole connect (bolt import + auth.test() + socket start) in a
+    // timeout so a slow/unreachable Slack never hangs the caller.
+    const result = await Promise.race([
+      this.doConnect(),
+      timeoutReject(this.connectTimeoutMs),
+    ]);
+
+    // If we raced with the timeout, the socket may still be connecting in the
+    // background; stop whatever got partially set up so state stays consistent.
+    if (result === TIMEOUT_SENTINEL) {
+      await this.abortPartialConnect();
+      throw new Error("Slack connection timed out");
+    }
+  }
+
+  private async doConnect(): Promise<void> {
     if (this._isConnected) return;
 
     const { botToken, appToken } = this.config;
@@ -281,11 +323,35 @@ export class SlackClient {
     });
 
     try {
-      await this.app.start();
-      this._isConnected = true;
+      const app = this.app;
+      await app.start();
+      // Guard against a stale connect racing past abortPartialConnect(): only
+      // mark connected if this is still the current app (not one we tore down
+      // after a timeout).
+      if (this.app === app) {
+        this._isConnected = true;
+      }
     } catch (error) {
       throw new Error(`Slack connection failed: ${(error as Error).message}`);
     }
+  }
+
+  /**
+   * Best-effort teardown after a connect timeout. The socket may still be
+   * connecting in the background, so stop the app and reset state so a later
+   * connect() starts clean.
+   */
+  private async abortPartialConnect(): Promise<void> {
+    if (this.app) {
+      try {
+        await this.app.stop();
+      } catch {
+        // Ignore stop errors during teardown
+      }
+      this.app = null;
+    }
+    this._isConnected = false;
+    this.botUserId = "";
   }
 
   async disconnect(): Promise<void> {
