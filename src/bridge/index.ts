@@ -1046,30 +1046,50 @@ export default function (pi: ExtensionAPI): void {
 
     // Branch 2: Terminal handover — send history + final response to Slack
     if (handoverPending) {
+      const handoverChatId = handoverPending.chatId;
       const conversation = getConversationHistory(ctx.sessionManager);
       const finalResponse = extractFinalResponseText(event.messages);
 
       if (conversation.length > 0 || finalResponse) {
-        const threadTs = await sendToRemoteChat(handoverPending.chatId, "🔄 Terminal session pushed to Slack", {
+        const threadTs = await sendToRemoteChat(handoverChatId, "🔄 Terminal session pushed to Slack", {
           forceTopLevel: true,
         });
         if (threadTs) {
-          for (const entry of conversation) {
-            const text = entry.role === "user"
-              ? `\u{1F5E3}\uFE0F **User:** ${entry.text}`
-              : entry.text;
-            await sendToRemoteChat(handoverPending.chatId, text, { threadId: threadTs });
-          }
-          if (finalResponse) {
-            await sendToRemoteChat(handoverPending.chatId, finalResponse, { threadId: threadTs });
-          }
-          markLatestAssistantDeliveredToSlackThread(
-            handoverPending.chatId,
-            threadTs,
-            undefined,
-            getCurrentSessionFile,
-            () => getLastAssistantMessageInfo(ctx.sessionManager),
-          );
+          // Background the history + final response replay so agent_end returns
+          // quickly — pi can process the user's next Slack message without waiting
+          // for dozens of sequential Slack API calls. (Same pattern as
+          // notifySlackSessionHandover.) The thread is already remembered via the
+          // awaited header send above.
+          void (async () => {
+            try {
+              for (const entry of conversation) {
+                const text = entry.role === "user"
+                  ? `\u{1F5E3}\uFE0F **User:** ${entry.text}`
+                  : entry.text;
+                await sendToRemoteChat(handoverChatId, text, { threadId: threadTs });
+              }
+              if (finalResponse) {
+                // getConversationHistory already includes the final assistant message
+                // (it collects completed assistant turns). Only post finalResponse
+                // separately when it is NOT already the last pushed message —
+                // otherwise the final message would be delivered twice.
+                const lastAssistantInConversation = [...conversation].reverse().find((e) => e.role === "assistant");
+                const alreadyPushed = lastAssistantInConversation && lastAssistantInConversation.text === finalResponse;
+                if (!alreadyPushed) {
+                  await sendToRemoteChat(handoverChatId, finalResponse, { threadId: threadTs });
+                }
+              }
+              markLatestAssistantDeliveredToSlackThread(
+                handoverChatId,
+                threadTs,
+                undefined,
+                getCurrentSessionFile,
+                () => getLastAssistantMessageInfo(ctx.sessionManager),
+              );
+            } catch {
+              // Ignore handover push failures
+            }
+          })();
         }
       }
       handoverPending.resolve();
