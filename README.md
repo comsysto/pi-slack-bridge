@@ -115,7 +115,7 @@ There are several main commands introduced:
 Each command is implemented in a deterministic fashion inside the Pi Agent harness so that no LLM call is triggered.
 To optout/optin a local terminal session being bridged to Slack, use `/slk-bridge optout` or `/slk-bridge optin` respectively.
 
-Whenever a session is switched, it gets assigned its own new thread in the DM with the Slack App bridged to your Pi agent. A user can also switch to a session by continuing the respective thread in Slack. The same thread-based flow is used when explicitly pushing a terminal session to Slack via `/slk-bridge handover`.
+Whenever a session is switched, it gets assigned its own new thread in the DM with the Slack App bridged to your Pi agent. A user can also switch to a session by continuing the respective thread in Slack. The same thread-based flow is used when explicitly pushing a terminal session to Slack via `/slk-bridge handover`. When a session is pushed to Slack (handover), the full conversation history plus the final response are replayed into the new thread so the Slack user can pick up where the terminal left off.
 
 ### Deterministic Dot Commands
 
