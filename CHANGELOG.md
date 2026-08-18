@@ -5,6 +5,7 @@
 ### Added
 - **Terminal-to-Slack handover** — `/slk-bridge handover` pushes the active terminal session into Slack and continues the conversation there
 - **Connect/handover test coverage** — added tests for `connect` and `handover` flows
+- **Behavioral test harness** — `tests/helpers/bridge-harness.ts` drives the bridge lifecycle via captured `pi.on` handlers and asserts on what is actually pushed to Slack; covers FLOW-002 (handover) and FLOW-003 (continuation) in `tests/bridge/`
 
 ### Changed
 - **Single trusted user routing** — notification delivery and handover targeting now use one remembered trusted Slack user/DM instead of arrays of notification chat IDs
@@ -13,6 +14,8 @@
 
 ### Fixed
 - **Handover robustness** — improved behavior around takeover/connect sequencing and session ownership transitions
+- **Handover final-message duplication** — a busy handover (`/slk-bridge handover` during an agent loop) no longer posts the final assistant message twice: `getConversationHistory` already includes it, so the separate final-response send is skipped when it equals the last pushed message
+- **Busy handover blocks next message** — `agent_end` no longer awaits the whole sequential history push; the replay is backgrounded (header awaited so the thread is remembered immediately), so pi can process the next Slack message without waiting for dozens of Slack API calls. The background closure captures `chatId` locally so it survives `handoverPending` being nulled
 - **Slow startup** — `session_start` no longer blocks pi readiness on the Slack connection: auto-connect now runs as a background task (lock is still acquired synchronously), and `SlackClient.connect()` fails fast after a 10s timeout instead of hanging on an unreachable Slack (the underlying socket-mode client retries `apps.connections.open` with exponential backoff)
 
 ## [0.2.0] - 2026-07-16
