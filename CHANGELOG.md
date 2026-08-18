@@ -13,6 +13,7 @@
 
 ### Fixed
 - **Handover robustness** — improved behavior around takeover/connect sequencing and session ownership transitions
+- **Slow startup** — `session_start` no longer blocks pi readiness on the Slack connection: auto-connect now runs as a background task (lock is still acquired synchronously), and `SlackClient.connect()` fails fast after a 10s timeout instead of hanging on an unreachable Slack (the underlying socket-mode client retries `apps.connections.open` with exponential backoff)
 
 ## [0.2.0] - 2026-07-16
 
